@@ -81,7 +81,8 @@ jobs:
         env:
           YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
         run: |
-          echo "$YC_SA_KEY" > /tmp/sa-key.json
+          echo "$YC_SA_KEY" | tr -d '\r' > /tmp/sa-key.json
+          cat /tmp/sa-key.json | jq . > /dev/null || { echo "Invalid JSON"; exit 1; }
           yc config set service-account-key /tmp/sa-key.json
           yc container registry configure-docker
 
