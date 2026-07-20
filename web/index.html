@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Guestbook</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>📖 Guestbook v2</h1>
+    <form id="form">
+        <input id="author" placeholder="Имя" required maxlength="100">
+        <textarea id="text" placeholder="Сообщение" required maxlength="1000"></textarea>
+        <button type="submit">Отправить</button>
+        <div id="status"></div>
+    </form>
+    <ul id="messages"></ul>
+    <script src="/static/app.js"></script>
+</body>
+</html>
