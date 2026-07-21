@@ -94,4 +94,3 @@ jobs:
         run: |
           docker push $REGISTRY/$IMAGE:$TAG
           docker push $REGISTRY/$IMAGE:latest
-
