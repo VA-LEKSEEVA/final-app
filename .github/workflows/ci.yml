@@ -94,36 +94,3 @@ jobs:
         run: |
           docker push $REGISTRY/$IMAGE:$TAG
           docker push $REGISTRY/$IMAGE:latest
-
-  # update-gitops временно отключён (ручное обновление prod.yaml)
-  # update-gitops:
-  #   name: Update GitOps repo
-  #   runs-on: ubuntu-latest
-  #   needs: build-and-push
-  #   steps:
-  #     - name: Checkout GitOps repo
-  #       env:
-  #         GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
-  #         GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
-  #       run: |
-  #         REPO_CLEAN=${GITOPS_REPO#https://}
-  #         git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-  #         cd /tmp/gitops
-  #         find . -name "prod.yaml" -type f
-  #         PROD_PATH=$(find . -name "prod.yaml" -type f | head -1)
-  #         echo "PROD_YAML_PATH=$PROD_PATH" >> $GITHUB_ENV
-  #     - name: Install yq
-  #       run: sudo snap install yq
-  #     - name: Bump image tag
-  #       run: |
-  #         cd /tmp/gitops
-  #         yq eval -i ".image.tag = \"$TAG\"" $PROD_YAML_PATH
-  #     - name: Commit and push
-  #       run: |
-  #         REPO_CLEAN=${GITOPS_REPO#https://}
-  #         cd /tmp/gitops
-  #         git config --global user.email "ci@example.com"
-  #         git config --global user.name "CI Bot"
-  #         git add .
-  #         git commit -m "Bump guestbook to ${{ github.sha }} [skip ci]" || echo "No changes"
-  #         git push https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} main
