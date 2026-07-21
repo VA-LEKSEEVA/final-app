@@ -108,12 +108,16 @@ jobs:
           REPO_CLEAN=${GITOPS_REPO#https://}
           echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
           git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-          echo "=== Содержимое /tmp/gitops ==="
+          echo "=== Текущая директория ==="
+          pwd
+          echo "=== Содержимое /tmp/gitops (ls -la) ==="
           ls -la /tmp/gitops
-          echo "=== Папка values/guestbook ==="
-          ls -la /tmp/gitops/values/guestbook/ || echo "Папка не найдена"
-          echo "=== Поиск prod.yaml ==="
-          find /tmp/gitops -name "prod.yaml"
+          echo "=== Содержимое /tmp/gitops/values (если есть) ==="
+          ls -la /tmp/gitops/values 2>/dev/null || echo "values не найдена"
+          echo "=== Содержимое /tmp/gitops/values/guestbook (если есть) ==="
+          ls -la /tmp/gitops/values/guestbook 2>/dev/null || echo "guestbook не найдена"
+          echo "=== Поиск prod.yaml во всём клоне ==="
+          find /tmp/gitops -name "prod.yaml" 2>/dev/null
 
       - name: Install yq
         run: |
@@ -124,7 +128,16 @@ jobs:
           TAG: ${{ github.sha }}
         run: |
           cd /tmp/gitops
-          yq eval -i ".image.tag = \"$TAG\"" values/guestbook/prod.yaml
+          # Если файл не найден, попробуем другие возможные пути
+          if [ -f "values/guestbook/prod.yaml" ]; then
+            yq eval -i ".image.tag = \"$TAG\"" values/guestbook/prod.yaml
+          elif [ -f "guestbook/prod.yaml" ]; then
+            yq eval -i ".image.tag = \"$TAG\"" guestbook/prod.yaml
+          else
+            echo "Файл prod.yaml не найден!"
+            find . -name "prod.yaml"
+            exit 1
+          fi
 
       - name: Commit and push
         env:
@@ -135,6 +148,6 @@ jobs:
           cd /tmp/gitops
           git config --global user.email "ci@example.com"
           git config --global user.name "CI Bot"
-          git add values/guestbook/prod.yaml
+          git add .
           git commit -m "Bump guestbook to ${{ github.sha }} [skip ci]" || echo "No changes"
           git push https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} main
