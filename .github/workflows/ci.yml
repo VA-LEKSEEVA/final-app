@@ -125,9 +125,7 @@ jobs:
           echo "=== Поиск prod.yaml ==="
           PROD_PATH=$(find . -name "prod.yaml" | head -1 | sed 's|^\./||')
           if [ -z "$PROD_PATH" ]; then
-            echo "❌ prod.yaml не найден! Содержимое:"
-            ls -la
-            find . -type f
+            echo "❌ prod.yaml не найден!"
             exit 1
           fi
           echo "✅ Найден: $PROD_PATH"
