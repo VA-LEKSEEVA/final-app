@@ -108,17 +108,9 @@ jobs:
           REPO_CLEAN=${GITOPS_REPO#https://}
           echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
           git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-          cd /tmp/gitops
-          echo "=== Текущая директория ==="
-          pwd
-          echo "=== Содержимое /tmp/gitops (ls -la) ==="
-          ls -la
-          echo "=== Поиск prod.yaml ==="
-          find . -name "prod.yaml"
-          echo "=== Содержимое values/guestbook (если есть) ==="
-          ls -la values/guestbook 2>/dev/null || echo "values/guestbook не существует"
-          echo "=== Полное дерево ==="
-          find . -type f | head -20
+          echo "=== Содержимое /tmp/gitops сразу после clone ==="
+          ls -la /tmp/gitops
+          find /tmp/gitops -type f
 
       - name: Install yq
         run: |
@@ -129,16 +121,21 @@ jobs:
           TAG: ${{ github.sha }}
         run: |
           cd /tmp/gitops
-          # Теперь используем путь, который нашли
+          echo "=== Текущая директория ==="
+          pwd
+          echo "=== ls -la ==="
+          ls -la
+          echo "=== find all files ==="
+          find . -type f
+          echo "=== поиск prod.yaml ==="
+          find . -name "prod.yaml"
           PROD_PATH=$(find . -name "prod.yaml" | head -1)
           if [ -z "$PROD_PATH" ]; then
-            echo "❌ prod.yaml не найден! Содержимое /tmp/gitops:"
-            ls -la
-            find . -type f
+            echo "❌ prod.yaml не найден"
             exit 1
           fi
-          echo "Найден prod.yaml по пути: $PROD_PATH"
-          yq eval -i ".image.tag = \"$TAG\"" $PROD_PATH
+          echo "✅ Найден: $PROD_PATH"
+          yq eval -i ".image.tag = \"$TAG\"" "$PROD_PATH"
 
       - name: Commit and push
         env:
