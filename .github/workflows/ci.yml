@@ -105,7 +105,17 @@ jobs:
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
         run: |
-          git clone https://oauth2:${GITOPS_TOKEN}@${GITOPS_REPO} /tmp/gitops
+          REPO_CLEAN=${GITOPS_REPO#https://}
+          echo "Cloning repo: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
+          git clone https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
+          echo "=== Contents of /tmp/gitops ==="
+          ls -la /tmp/gitops
+          echo "=== Looking for values/guestbook ==="
+          ls -la /tmp/gitops/values/guestbook/ || echo "Directory not found"
+          echo "=== Full find ==="
+          find /tmp/gitops -name "prod.yaml"
+          echo "=== Current branch ==="
+          cd /tmp/gitops && git branch && git log --oneline -1
 
       - name: Install yq
         run: |
@@ -123,9 +133,10 @@ jobs:
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
         run: |
+          REPO_CLEAN=${GITOPS_REPO#https://}
           cd /tmp/gitops
           git config --global user.email "ci@example.com"
           git config --global user.name "CI Bot"
           git add values/guestbook/prod.yaml
           git commit -m "Bump guestbook to ${{ github.sha }} [skip ci]" || echo "No changes"
-          git push https://oauth2:${GITOPS_TOKEN}@${GITOPS_REPO}
+          git push https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} main
