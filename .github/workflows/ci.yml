@@ -106,20 +106,14 @@ jobs:
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
         run: |
           REPO_CLEAN=${GITOPS_REPO#https://}
-          echo "Клонирование из: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
+          echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
           git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-          echo "=== Текущая ветка в клоне ==="
-          cd /tmp/gitops && git branch -a
-          echo "=== Последний коммит ==="
-          cd /tmp/gitops && git log --oneline -1
-          echo "=== Содержимое /tmp/gitops (ls -la) ==="
+          echo "=== Содержимое /tmp/gitops ==="
           ls -la /tmp/gitops
-          echo "=== Папка values/guestbook (ls -la) ==="
-          ls -la /tmp/gitops/values/guestbook/ || echo "Папка не найдена!"
+          echo "=== Папка values/guestbook ==="
+          ls -la /tmp/gitops/values/guestbook/ || echo "Папка не найдена"
           echo "=== Поиск prod.yaml ==="
           find /tmp/gitops -name "prod.yaml"
-          echo "=== Дерево верхнего уровня ==="
-          ls -R /tmp/gitops | head -30
 
       - name: Install yq
         run: |
