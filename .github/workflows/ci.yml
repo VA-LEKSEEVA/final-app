@@ -108,16 +108,20 @@ jobs:
           REPO_CLEAN=${GITOPS_REPO#https://}
           echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
           git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-          echo "=== Текущая директория ==="
-          pwd
-          echo "=== Содержимое /tmp/gitops (ls -la) ==="
-          ls -la /tmp/gitops
-          echo "=== Содержимое /tmp/gitops/values (если есть) ==="
-          ls -la /tmp/gitops/values 2>/dev/null || echo "values не найдена"
-          echo "=== Содержимое /tmp/gitops/values/guestbook (если есть) ==="
-          ls -la /tmp/gitops/values/guestbook 2>/dev/null || echo "guestbook не найдена"
-          echo "=== Поиск prod.yaml во всём клоне ==="
-          find /tmp/gitops -name "prod.yaml" 2>/dev/null
+          cd /tmp/gitops
+          echo "=== Поиск prod.yaml ==="
+          find . -name "prod.yaml" -type f
+          PROD_PATH=$(find . -name "prod.yaml" -type f | head -1)
+          if [ -z "$PROD_PATH" ]; then
+            echo "prod.yaml не найден!"
+            echo "Содержимое /tmp/gitops:"
+            ls -la
+            echo "Дерево /tmp/gitops:"
+            find . -type f
+            exit 1
+          fi
+          echo "Найден prod.yaml по пути: $PROD_PATH"
+          echo "PROD_YAML_PATH=$PROD_PATH" >> $GITHUB_ENV
 
       - name: Install yq
         run: |
@@ -126,18 +130,10 @@ jobs:
       - name: Bump image tag in prod.yaml
         env:
           TAG: ${{ github.sha }}
+          PROD_YAML_PATH: ${{ env.PROD_YAML_PATH }}
         run: |
           cd /tmp/gitops
-          # Если файл не найден, попробуем другие возможные пути
-          if [ -f "values/guestbook/prod.yaml" ]; then
-            yq eval -i ".image.tag = \"$TAG\"" values/guestbook/prod.yaml
-          elif [ -f "guestbook/prod.yaml" ]; then
-            yq eval -i ".image.tag = \"$TAG\"" guestbook/prod.yaml
-          else
-            echo "Файл prod.yaml не найден!"
-            find . -name "prod.yaml"
-            exit 1
-          fi
+          yq eval -i ".image.tag = \"$TAG\"" $PROD_YAML_PATH
 
       - name: Commit and push
         env:
