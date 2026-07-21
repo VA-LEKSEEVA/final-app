@@ -94,3 +94,61 @@ jobs:
         run: |
           docker push $REGISTRY/$IMAGE:$TAG
           docker push $REGISTRY/$IMAGE:latest
+
+  update-gitops:
+    name: Update GitOps repo
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Checkout GitOps repo
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
+        run: |
+          REPO_CLEAN=${GITOPS_REPO#https://}
+          echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
+          git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
+          cd /tmp/gitops
+          echo "=== Текущая директория ==="
+          pwd
+          echo "=== Содержимое /tmp/gitops (ls -la) ==="
+          ls -la
+          echo "=== Поиск prod.yaml ==="
+          find . -name "prod.yaml"
+          echo "=== Содержимое values/guestbook (если есть) ==="
+          ls -la values/guestbook 2>/dev/null || echo "values/guestbook не существует"
+          echo "=== Полное дерево ==="
+          find . -type f | head -20
+
+      - name: Install yq
+        run: |
+          sudo snap install yq
+
+      - name: Bump image tag in prod.yaml
+        env:
+          TAG: ${{ github.sha }}
+        run: |
+          cd /tmp/gitops
+          # Теперь используем путь, который нашли
+          PROD_PATH=$(find . -name "prod.yaml" | head -1)
+          if [ -z "$PROD_PATH" ]; then
+            echo "❌ prod.yaml не найден! Содержимое /tmp/gitops:"
+            ls -la
+            find . -type f
+            exit 1
+          fi
+          echo "Найден prod.yaml по пути: $PROD_PATH"
+          yq eval -i ".image.tag = \"$TAG\"" $PROD_PATH
+
+      - name: Commit and push
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
+        run: |
+          REPO_CLEAN=${GITOPS_REPO#https://}
+          cd /tmp/gitops
+          git config --global user.email "ci@example.com"
+          git config --global user.name "CI Bot"
+          git add .
+          git commit -m "Bump guestbook to ${{ github.sha }} [skip ci]" || echo "No changes"
+          git push https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} main
