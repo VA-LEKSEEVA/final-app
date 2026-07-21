@@ -95,6 +95,7 @@ jobs:
           docker push $REGISTRY/$IMAGE:$TAG
           docker push $REGISTRY/$IMAGE:latest
 
+
   update-gitops:
     name: Update GitOps repo
     runs-on: ubuntu-latest
@@ -106,26 +107,22 @@ jobs:
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
         run: |
           REPO_CLEAN=${GITOPS_REPO#https://}
-          echo "Клонирование репозитория: https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN}"
           git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
-          echo "=== Содержимое /tmp/gitops сразу после clone ==="
-          ls -la /tmp/gitops
-          echo "=== Дерево /tmp/gitops ==="
-          find /tmp/gitops -type f
 
       - name: Install yq
         run: |
-          sudo snap install yq
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
       - name: Bump image tag in prod.yaml
         env:
           TAG: ${{ github.sha }}
         run: |
           cd /tmp/gitops
-          echo "=== Поиск prod.yaml ==="
-          PROD_PATH=$(find . -name "prod.yaml" | head -1 | sed 's|^\./||')
+          PROD_PATH=$(find . -name "prod.yaml" | head -1)
           if [ -z "$PROD_PATH" ]; then
-            echo "❌ prod.yaml не найден!"
+            echo "❌ prod.yaml не найден"
             exit 1
           fi
           echo "✅ Найден: $PROD_PATH"
