@@ -123,7 +123,7 @@ jobs:
         run: |
           cd /tmp/gitops
           echo "=== Поиск prod.yaml ==="
-          PROD_PATH=$(find . -name "prod.yaml" | head -1)
+          PROD_PATH=$(find . -name "prod.yaml" | head -1 | sed 's|^\./||')
           if [ -z "$PROD_PATH" ]; then
             echo "❌ prod.yaml не найден! Содержимое:"
             ls -la
