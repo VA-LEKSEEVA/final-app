@@ -385,7 +385,6 @@ jobs:
       cancel-in-progress: false
     environment:
       name: production
-      url: https://guestbook.vika-cloud.ru
     env:
       APP_HOST: guestbook.vika-cloud.ru
       GITOPS_URL: https://github.com/VA-LEKSEEVA/final-gitops.git
@@ -476,31 +475,18 @@ jobs:
             echo "AWS_SESSION_TOKEN=$session_token"
           } >> "$GITHUB_ENV"
 
-      - name: Discover DNS zone and prepare Terraform variables
-        id: deployment
+      - name: Prepare Terraform variables
         run: |
           set -euo pipefail
-          dns_zone_json="$(yc dns zone list --format json)"
-          dns_zone_id="$(jq -er --arg host "${APP_HOST}." '
-            [
-              .[] |
-              select(.zone as $zone | $host | endswith($zone)) |
-              {id, zone}
-            ] |
-            sort_by(.zone | length) |
-            last.id
-          ' <<<"$dns_zone_json")"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$YC_FOLDER_ID"
           app_host            = "$APP_HOST"
-          dns_zone_id         = "$dns_zone_id"
           manage_dns_record   = false
           cluster_name        = "final-k3s-v2"
           ssh_user            = "ubuntu"
           ssh_private_key_path = "$RUNNER_TEMP/final-k3s-key"
           EOF
-          echo "dns_zone_id=$dns_zone_id" >> "$GITHUB_OUTPUT"
 
       - name: Apply Terraform infrastructure
         run: |
@@ -513,17 +499,68 @@ jobs:
             APP_HOST="$APP_HOST" \
             GITOPS_URL="$GITOPS_URL"
 
-      - name: Point production DNS to the new load balancer
-        env:
-          DNS_ZONE_ID: ${{ steps.deployment.outputs.dns_zone_id }}
+      - name: Resolve a production hostname
+        id: hostname
         run: |
           set -euo pipefail
           app_public_ip="$(terraform \
             -chdir=final-infra/terraform/envs/prod \
             output -raw app_public_ip)"
-          yc dns zone replace-records \
-            --id "$DNS_ZONE_ID" \
-            --record "${APP_HOST}. 60 A ${app_public_ip}"
+          current_ips="$(dig +short A "$APP_HOST" | sort -u)"
+          if printf '%s\n' "$current_ips" | grep -Fxq "$app_public_ip"; then
+            production_host="$APP_HOST"
+          else
+            production_host="guestbook-${app_public_ip//./-}.sslip.io"
+            echo "::warning title=External DNS fallback::${APP_HOST} is managed by an external DNS provider and does not point to ${app_public_ip}; using ${production_host}"
+          fi
+          {
+            echo "APP_HOST=$production_host"
+            echo "TF_VAR_app_host=$production_host"
+          } >> "$GITHUB_ENV"
+          echo "host=$production_host" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Production deployment"
+            echo
+            echo "- Host: https://${production_host}"
+            echo "- Load balancer: ${app_public_ip}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update GitOps production hostname
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          repository: VA-LEKSEEVA/final-gitops
+          token: ${{ secrets.GITOPS_TOKEN }}
+          ref: main
+          path: deploy-gitops
+          fetch-depth: 1
+
+      - name: Commit production hostname to GitOps
+        working-directory: deploy-gitops
+        env:
+          PRODUCTION_HOST: ${{ steps.hostname.outputs.host }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/infra-venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          path = Path("values/guestbook/prod.yaml")
+          values = yaml.safe_load(path.read_text())
+          values.setdefault("ingress", {})["host"] = os.environ["PRODUCTION_HOST"]
+          path.write_text(yaml.safe_dump(values, sort_keys=False))
+          PY
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if ! git diff --quiet; then
+            git add values/guestbook/prod.yaml
+            git commit -m "Set production host to ${PRODUCTION_HOST} [skip ci]"
+            git push origin HEAD:main
+          fi
+
+      - name: Wait for production DNS
+        run: |
+          set -euo pipefail
           make -C final-infra dns \
             TF_VARS_FILE="$TF_VARS_FILE" \
             APP_HOST="$APP_HOST"

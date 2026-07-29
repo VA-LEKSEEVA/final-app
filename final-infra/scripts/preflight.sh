@@ -49,8 +49,19 @@ if ! terraform -chdir="$TF_DIR" fmt -check -recursive >/dev/null; then
   die "Terraform files are not formatted; run terraform -chdir=$TF_DIR fmt -recursive"
 fi
 
-if ! terraform -chdir="$TF_DIR" output -json >/dev/null 2>&1; then
-  if [[ -n "${TF_VAR_dns_zone_id:-}" ]]; then
+terraform_outputs="$(terraform -chdir="$TF_DIR" output -json 2>/dev/null || true)"
+if [[ -z "$terraform_outputs" || "$terraform_outputs" == "{}" ]]; then
+  variables_file=""
+  [[ -f "$TF_DIR/terraform.tfvars" ]] && variables_file="$TF_DIR/terraform.tfvars"
+  [[ -n "${TF_VARS_FILE:-}" ]] && variables_file="$TF_VARS_FILE"
+  manages_dns=true
+  if [[ -n "$variables_file" ]] &&
+    grep -Eq '^[[:space:]]*manage_dns_record[[:space:]]*=[[:space:]]*false' "$variables_file"; then
+    manages_dns=false
+  fi
+  if [[ "$manages_dns" == false ]]; then
+    :
+  elif [[ -n "${TF_VAR_dns_zone_id:-}" ]]; then
     [[ "$TF_VAR_dns_zone_id" =~ ^dns[a-z0-9]+$ && ${#TF_VAR_dns_zone_id} -ge 8 ]] ||
       die "TF_VAR_dns_zone_id must be a real Yandex Cloud DNS zone ID"
   elif [[ -f "$TF_DIR/terraform.tfvars" ]]; then

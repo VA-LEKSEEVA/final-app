@@ -111,7 +111,8 @@ terraform -chdir=terraform/envs/prod output -raw app_public_ip
 Для первого zero-touch прогона public zone должна находиться в Yandex Cloud DNS,
 а `dns_zone_id` должен быть задан в `terraform.tfvars`. Terraform создаст
 A-record сам. Внешний DNS нельзя обновить одной командой без API credentials;
-поэтому первый bootstrap без `dns_zone_id` намеренно отклоняется.
+при `manage_dns_record=false` CI автоматически использует реальный wildcard
+hostname вида `guestbook-<NLB-IP>.sslip.io`.
 Повторный `make bootstrap` безопасен: Terraform, Ansible, Secret и Argo CD
 применяются идемпотентно.
 
