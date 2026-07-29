@@ -11,6 +11,7 @@ require_command yc
 require_file "$KUBECONFIG"
 
 bucket="$(tf_output_raw_optional backup_bucket)"
+[[ -n "$bucket" ]] || bucket="${BACKUP_BUCKET:-}"
 namespace="$(tf_output_raw_optional backup_namespace)"
 cronjob="$(tf_output_raw_optional backup_cronjob_name)"
 [[ -n "$namespace" ]] || namespace="guestbook-prod"

@@ -398,6 +398,7 @@ jobs:
       AWS_REGION: ru-central1
       AWS_DEFAULT_REGION: ru-central1
       AWS_EC2_METADATA_DISABLED: "true"
+      BACKUP_BUCKET: guestbook-backups-2026
     steps:
       - name: Checkout code
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
@@ -461,7 +462,7 @@ jobs:
           set -euo pipefail
           key_json="$(yc iam access-key issue-ephemeral \
             --session-name "github-actions-${GITHUB_RUN_ID}" \
-            --duration 2h \
+            --duration 12h \
             --format json)"
           access_key_id="$(jq -er '.access_key_id // .access_key.key_id' <<<"$key_json")"
           secret_access_key="$(jq -er '.secret // .secret_access_key' <<<"$key_json")"
@@ -483,6 +484,7 @@ jobs:
           folder_id           = "$YC_FOLDER_ID"
           app_host            = "$APP_HOST"
           manage_dns_record   = false
+          manage_backup_resources = false
           cluster_name        = "final-k3s-v2"
           ssh_user            = "ubuntu"
           ssh_private_key_path = "$RUNNER_TEMP/final-k3s-key"

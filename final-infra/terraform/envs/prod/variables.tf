@@ -172,6 +172,12 @@ variable "backup_bucket_name" {
   }
 }
 
+variable "manage_backup_resources" {
+  description = "Create a dedicated backup service account, static access key, and bucket."
+  type        = bool
+  default     = true
+}
+
 variable "backup_namespace" {
   description = "Kubernetes namespace that receives the backup Secret."
   type        = string

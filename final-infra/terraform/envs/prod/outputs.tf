@@ -17,7 +17,11 @@ output "server_public_ip" {
 
 output "app_public_ip" {
   description = "Network Load Balancer IP used by the application DNS A record."
-  value       = yandex_vpc_address.ingress.external_ipv4_address[0].address
+  value = one([
+    for listener in yandex_lb_network_load_balancer.ingress.listener :
+    one(listener.external_address_spec).address
+    if listener.name == "http"
+  ])
 }
 
 output "ssh_user" {
@@ -34,7 +38,7 @@ output "ssh_private_key_pem" {
 }
 
 output "backup_bucket" {
-  value = yandex_storage_bucket.backup.bucket
+  value = try(yandex_storage_bucket.backup[0].bucket, null)
 }
 
 output "backup_s3_endpoint" {
@@ -42,12 +46,12 @@ output "backup_s3_endpoint" {
 }
 
 output "backup_access_key" {
-  value     = yandex_iam_service_account_static_access_key.backup.access_key
+  value     = try(yandex_iam_service_account_static_access_key.backup[0].access_key, null)
   sensitive = true
 }
 
 output "backup_secret_key" {
-  value     = yandex_iam_service_account_static_access_key.backup.secret_key
+  value     = try(yandex_iam_service_account_static_access_key.backup[0].secret_key, null)
   sensitive = true
 }
 

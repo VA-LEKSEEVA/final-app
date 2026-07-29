@@ -120,18 +120,6 @@ data "yandex_compute_image" "ubuntu" {
   family = var.ubuntu_image_family
 }
 
-resource "yandex_vpc_address" "node" {
-  for_each = local.nodes
-
-  name      = "${var.cluster_name}-${each.key}-public-ip"
-  folder_id = local.effective_folder_id
-  labels    = merge(local.common_labels, { role = each.value.role })
-
-  external_ipv4_address {
-    zone_id = var.zone
-  }
-}
-
 resource "yandex_compute_instance" "node" {
   for_each = local.nodes
 
@@ -161,7 +149,6 @@ resource "yandex_compute_instance" "node" {
   network_interface {
     subnet_id          = yandex_vpc_subnet.cluster.id
     nat                = true
-    nat_ip_address     = yandex_vpc_address.node[each.key].external_ipv4_address[0].address
     ip_address         = each.value.local_ip
     security_group_ids = [yandex_vpc_security_group.cluster.id]
   }
@@ -190,16 +177,6 @@ resource "yandex_lb_target_group" "ingress" {
   }
 }
 
-resource "yandex_vpc_address" "ingress" {
-  name      = "${var.cluster_name}-ingress-public-ip"
-  folder_id = local.effective_folder_id
-  labels    = local.common_labels
-
-  external_ipv4_address {
-    zone_id = var.zone
-  }
-}
-
 resource "yandex_lb_network_load_balancer" "ingress" {
   name      = "${var.cluster_name}-ingress"
   folder_id = local.effective_folder_id
@@ -212,7 +189,6 @@ resource "yandex_lb_network_load_balancer" "ingress" {
     protocol    = "tcp"
 
     external_address_spec {
-      address    = yandex_vpc_address.ingress.external_ipv4_address[0].address
       ip_version = "ipv4"
     }
   }
@@ -224,7 +200,6 @@ resource "yandex_lb_network_load_balancer" "ingress" {
     protocol    = "tcp"
 
     external_address_spec {
-      address    = yandex_vpc_address.ingress.external_ipv4_address[0].address
       ip_version = "ipv4"
     }
   }
@@ -247,32 +222,40 @@ resource "yandex_lb_network_load_balancer" "ingress" {
 }
 
 resource "yandex_iam_service_account" "backup" {
+  count = var.manage_backup_resources ? 1 : 0
+
   name        = "${var.cluster_name}-backup"
   folder_id   = local.effective_folder_id
   description = "Uploads guestbook PostgreSQL backups to Object Storage"
 }
 
 resource "yandex_resourcemanager_folder_iam_member" "backup_editor" {
+  count = var.manage_backup_resources ? 1 : 0
+
   folder_id = local.effective_folder_id
   role      = "storage.editor"
-  member    = "serviceAccount:${yandex_iam_service_account.backup.id}"
+  member    = "serviceAccount:${yandex_iam_service_account.backup[0].id}"
 }
 
 data "yandex_client_config" "current" {}
 
 resource "yandex_iam_service_account_static_access_key" "backup" {
-  service_account_id = yandex_iam_service_account.backup.id
+  count = var.manage_backup_resources ? 1 : 0
+
+  service_account_id = yandex_iam_service_account.backup[0].id
   description        = "Static S3 credentials consumed by the backup Kubernetes Secret"
 }
 
 resource "yandex_storage_bucket" "backup" {
+  count = var.manage_backup_resources ? 1 : 0
+
   bucket = coalesce(
     var.backup_bucket_name,
     "${var.cluster_name}-backup-${random_id.bucket_suffix.hex}"
   )
 
-  access_key    = yandex_iam_service_account_static_access_key.backup.access_key
-  secret_key    = yandex_iam_service_account_static_access_key.backup.secret_key
+  access_key    = yandex_iam_service_account_static_access_key.backup[0].access_key
+  secret_key    = yandex_iam_service_account_static_access_key.backup[0].secret_key
   max_size      = 10 * 1024 * 1024 * 1024
   force_destroy = true
 
@@ -309,5 +292,9 @@ resource "yandex_dns_recordset" "app" {
   name    = "${trimsuffix(var.app_host, ".")}."
   type    = "A"
   ttl     = 60
-  data    = [yandex_vpc_address.ingress.external_ipv4_address[0].address]
+  data = [one([
+    for listener in yandex_lb_network_load_balancer.ingress.listener :
+    one(listener.external_address_spec).address
+    if listener.name == "http"
+  ])]
 }
