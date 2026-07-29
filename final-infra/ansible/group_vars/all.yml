@@ -4,7 +4,7 @@ argocd_version: "v2.13.3"
 argocd_install_sha256: "0940f3f92ee6b91141cefc5368b1379aed0aef898186879ea2ca5f2607ee2617"
 argocd_namespace: argocd
 argocd_root_app_name: final-platform
-argocd_root_app_path: clusters/prod
+argocd_root_app_path: bootstrap/apps
 argocd_repo_revision: main
 cluster_cidr: 10.42.0.0/16
 service_cidr: 10.43.0.0/16

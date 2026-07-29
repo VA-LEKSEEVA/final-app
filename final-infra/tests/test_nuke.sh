@@ -16,8 +16,12 @@ touch "$KUBECONFIG" "$INVENTORY"
 
 cat >"$BIN_DIR/terraform" <<'EOF'
 #!/usr/bin/env bash
-echo "terraform must not be called without a state file" >&2
-exit 99
+case "$*" in
+  *" init "*) exit 0 ;;
+  *" state list"*) exit 0 ;;
+  *" destroy "*) echo "destroy must not run for empty state" >&2; exit 99 ;;
+  *) exit 0 ;;
+esac
 EOF
 chmod +x "$BIN_DIR/terraform"
 

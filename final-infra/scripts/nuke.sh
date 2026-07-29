@@ -6,8 +6,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
 require_command terraform
 
-state_file="$TF_DIR/terraform.tfstate"
-if [[ -s "$state_file" ]]; then
+log "Initializing Terraform state"
+terraform -chdir="$TF_DIR" init -input=false
+
+state_resources="$(terraform -chdir="$TF_DIR" state list 2>/dev/null || true)"
+if [[ -n "$state_resources" ]]; then
   log "Destroying Terraform-managed infrastructure"
   args=(-auto-approve -input=false)
   if [[ -n "${TF_VARS_FILE:-}" ]]; then
@@ -15,10 +18,9 @@ if [[ -s "$state_file" ]]; then
     args+=("-var-file=$TF_VARS_FILE")
   fi
 
-  terraform -chdir="$TF_DIR" init -input=false
   terraform -chdir="$TF_DIR" destroy "${args[@]}"
 else
-  log "No local Terraform state found; nothing to destroy"
+  log "Terraform state has no resources; nothing to destroy"
 fi
 
 cleanup_file "$KUBECONFIG"

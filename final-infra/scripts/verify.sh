@@ -141,8 +141,8 @@ backup_cronjob_exists() {
   local namespace cronjob
   namespace="$(tf_output_raw_optional backup_namespace)"
   cronjob="$(tf_output_raw_optional backup_cronjob_name)"
-  [[ -n "$namespace" ]] || namespace="guestbook"
-  [[ -n "$cronjob" ]] || cronjob="guestbook-backup"
+  [[ -n "$namespace" ]] || namespace="guestbook-prod"
+  [[ -n "$cronjob" ]] || cronjob="guestbook-prod-backup"
   kubectl_cmd -n "$namespace" get cronjob "$cronjob"
 }
 
@@ -150,8 +150,8 @@ backup_secret_exists() {
   local namespace secret_name
   namespace="$(tf_output_raw_optional backup_namespace)"
   secret_name="$(tf_output_raw_optional backup_secret_name)"
-  [[ -n "$namespace" ]] || namespace="guestbook"
-  [[ -n "$secret_name" ]] || secret_name="guestbook-backup"
+  [[ -n "$namespace" ]] || namespace="guestbook-prod"
+  [[ -n "$secret_name" ]] || secret_name="backup-s3-creds"
   kubectl_cmd -n "$namespace" get secret "$secret_name"
 }
 

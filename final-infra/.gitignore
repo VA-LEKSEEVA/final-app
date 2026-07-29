@@ -9,6 +9,8 @@ crash.log
 
 kubeconfig
 known_hosts
+cluster-key
+.generated/
 terraform/envs/prod/inventory.ini
 .backup-secret.*.yaml
 .backup-secret.*.env

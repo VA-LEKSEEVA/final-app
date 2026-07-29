@@ -31,10 +31,17 @@ locals {
 
   effective_cloud_id  = var.cloud_id != null && var.cloud_id != "" ? var.cloud_id : data.yandex_client_config.current.cloud_id
   effective_folder_id = var.folder_id != null && var.folder_id != "" ? var.folder_id : data.yandex_client_config.current.folder_id
+  ssh_public_key = var.ssh_public_key_path != null && var.ssh_public_key_path != "" ? trimspace(
+    file(pathexpand(var.ssh_public_key_path))
+  ) : trimspace(tls_private_key.cluster.public_key_openssh)
 }
 
 resource "random_id" "bucket_suffix" {
   byte_length = 4
+}
+
+resource "tls_private_key" "cluster" {
+  algorithm = "ED25519"
 }
 
 resource "yandex_vpc_network" "cluster" {
@@ -163,7 +170,7 @@ resource "yandex_compute_instance" "node" {
     serial-port-enable = "1"
     user-data = templatefile("${path.module}/cloud-init.yaml.tftpl", {
       ssh_user       = var.ssh_user
-      ssh_public_key = trimspace(file(pathexpand(var.ssh_public_key_path)))
+      ssh_public_key = local.ssh_public_key
     })
   }
 
@@ -296,7 +303,7 @@ resource "yandex_storage_bucket" "backup" {
 }
 
 resource "yandex_dns_recordset" "app" {
-  count = var.dns_zone_id != null && var.dns_zone_id != "" && var.app_host != null && var.app_host != "" ? 1 : 0
+  count = var.manage_dns_record && var.dns_zone_id != null && var.dns_zone_id != "" && var.app_host != null && var.app_host != "" ? 1 : 0
 
   zone_id = var.dns_zone_id
   name    = "${trimsuffix(var.app_host, ".")}."

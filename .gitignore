@@ -12,4 +12,6 @@ final-infra/**/terraform.tfvars
 final-infra/**/inventory.ini
 final-infra/kubeconfig
 final-infra/known_hosts
+final-infra/cluster-key
+final-infra/.generated/
 final-infra/runtime-secrets.env

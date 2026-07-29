@@ -48,6 +48,12 @@ variable "dns_zone_id" {
   }
 }
 
+variable "manage_dns_record" {
+  description = "Whether Terraform owns the APP_HOST A record. CI replaces the existing record through yc CLI."
+  type        = bool
+  default     = true
+}
+
 variable "admin_cidrs" {
   description = "CIDRs allowed to SSH and reach the Kubernetes API. Restrict to your public /32 for production."
   type        = list(string)
@@ -94,9 +100,10 @@ variable "ssh_user" {
 }
 
 variable "ssh_public_key_path" {
-  description = "Path to the SSH public key added to each VM."
+  description = "Optional path to an existing SSH public key. If null, Terraform generates and persists a key pair in state."
   type        = string
-  default     = "~/.ssh/id_ed25519.pub"
+  default     = null
+  nullable    = true
 }
 
 variable "ssh_private_key_path" {
@@ -168,19 +175,19 @@ variable "backup_bucket_name" {
 variable "backup_namespace" {
   description = "Kubernetes namespace that receives the backup Secret."
   type        = string
-  default     = "guestbook"
+  default     = "guestbook-prod"
 }
 
 variable "backup_secret_name" {
   description = "Kubernetes Secret name expected by the backup CronJob."
   type        = string
-  default     = "guestbook-backup"
+  default     = "backup-s3-creds"
 }
 
 variable "backup_cronjob_name" {
   description = "CronJob used by make backup-check."
   type        = string
-  default     = "guestbook-backup"
+  default     = "guestbook-prod-backup"
 }
 
 variable "labels" {

@@ -28,6 +28,11 @@ output "ssh_private_key_path" {
   value = pathexpand(var.ssh_private_key_path)
 }
 
+output "ssh_private_key_pem" {
+  value     = tls_private_key.cluster.private_key_openssh
+  sensitive = true
+}
+
 output "backup_bucket" {
   value = yandex_storage_bucket.backup.bucket
 }

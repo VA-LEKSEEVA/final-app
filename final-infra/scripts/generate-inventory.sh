@@ -57,6 +57,12 @@ ssh_private_key_path="$(jq -r '.ssh_private_key_path.value // empty' <<<"$output
 [[ -n "$ssh_user" ]] || ssh_user="ubuntu"
 [[ -n "$ssh_private_key_path" ]] || ssh_private_key_path="$HOME/.ssh/id_ed25519"
 ssh_private_key_path="$(expand_home_path "$ssh_private_key_path")"
+if [[ ! -f "$ssh_private_key_path" ]]; then
+  generated_private_key="$(jq -r '.ssh_private_key_pem.value // empty' <<<"$outputs")"
+  require_nonempty "Terraform output ssh_private_key_pem" "$generated_private_key"
+  printf '%s\n' "$generated_private_key" | atomic_write "$ssh_private_key_path" 0600
+  unset generated_private_key
+fi
 require_file "$ssh_private_key_path"
 known_hosts_target="$INFRA_ROOT/known_hosts"
 if [[ "$INVENTORY" != "$TF_DIR/inventory.ini" ]]; then

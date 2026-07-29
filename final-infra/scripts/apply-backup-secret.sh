@@ -21,8 +21,8 @@ bucket="$(read_output backup_bucket)"
 endpoint="$(jq -r '.backup_s3_endpoint.value // "https://storage.yandexcloud.net"' <<<"$outputs")"
 access_key="$(read_output backup_access_key)"
 secret_key="$(read_output backup_secret_key)"
-namespace="$(jq -r '.backup_namespace.value // "guestbook"' <<<"$outputs")"
-secret_name="$(jq -r '.backup_secret_name.value // "guestbook-backup"' <<<"$outputs")"
+namespace="$(jq -r '.backup_namespace.value // "guestbook-prod"' <<<"$outputs")"
+secret_name="$(jq -r '.backup_secret_name.value // "backup-s3-creds"' <<<"$outputs")"
 
 [[ "$namespace" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die "invalid backup namespace: $namespace"
 [[ "$secret_name" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || die "invalid backup secret name: $secret_name"
@@ -40,6 +40,7 @@ AWS_ACCESS_KEY_ID=$access_key
 AWS_SECRET_ACCESS_KEY=$secret_key
 AWS_ENDPOINT_URL=$endpoint
 BACKUP_BUCKET=$bucket
+S3_BUCKET=$bucket
 EOF
 kubectl_cmd -n "$namespace" create secret generic "$secret_name" \
   --from-env-file="$secret_env" \
