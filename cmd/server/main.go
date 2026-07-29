@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -81,6 +82,7 @@ func run() int {
 	} else {
 		metrics.MessagesTotal.Set(float64(count))
 	}
+	cancelStartup()
 
 	static := http.FileServer(http.Dir("web/static"))
 	server := &handlers.Server{
@@ -146,9 +148,14 @@ type config struct {
 }
 
 func loadConfig() (config, error) {
+	databaseURL, err := databaseURLFromEnv()
+	if err != nil {
+		return config{}, err
+	}
+
 	cfg := config{
-		DatabaseURL:       os.Getenv("DATABASE_URL"),
-		ListenAddr:        envOrDefault("LISTEN_ADDR", defaultListenAddr),
+		DatabaseURL:       databaseURL,
+		ListenAddr:        strings.TrimSpace(envOrDefault("LISTEN_ADDR", defaultListenAddr)),
 		StartupTimeout:    defaultStartupTimeout,
 		ShutdownTimeout:   defaultShutdownTimeout,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -156,11 +163,10 @@ func loadConfig() (config, error) {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	if strings.TrimSpace(cfg.DatabaseURL) == "" {
-		return config{}, errors.New("DATABASE_URL is required")
+	if err := validateListenAddr(cfg.ListenAddr); err != nil {
+		return config{}, err
 	}
 
-	var err error
 	if cfg.StartupTimeout, err = durationFromEnv("STARTUP_TIMEOUT", cfg.StartupTimeout); err != nil {
 		return config{}, err
 	}
@@ -182,8 +188,68 @@ func loadConfig() (config, error) {
 	return cfg, nil
 }
 
+func databaseURLFromEnv() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("DATABASE_URL")); value != "" {
+		return value, nil
+	}
+
+	host := strings.TrimSpace(os.Getenv("DB_HOST"))
+	if host == "" {
+		return "", errors.New("DATABASE_URL or DB_HOST is required")
+	}
+
+	port := strings.TrimSpace(envOrDefault("DB_PORT", "5432"))
+	if err := validatePort("DB_PORT", port); err != nil {
+		return "", err
+	}
+
+	user := os.Getenv("DB_USER")
+	name := strings.TrimSpace(os.Getenv("DB_NAME"))
+	if strings.TrimSpace(user) == "" {
+		return "", errors.New("DB_USER is required when DATABASE_URL is not set")
+	}
+	if name == "" {
+		return "", errors.New("DB_NAME is required when DATABASE_URL is not set")
+	}
+
+	sslMode := strings.TrimSpace(envOrDefault("DB_SSLMODE", "disable"))
+	if sslMode == "" {
+		return "", errors.New("DB_SSLMODE must not be empty")
+	}
+
+	databaseURL := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, os.Getenv("DB_PASSWORD")),
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + name,
+	}
+	query := databaseURL.Query()
+	query.Set("sslmode", sslMode)
+	databaseURL.RawQuery = query.Encode()
+	return databaseURL.String(), nil
+}
+
+func validateListenAddr(addr string) error {
+	if addr == "" {
+		return errors.New("LISTEN_ADDR must not be empty")
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("LISTEN_ADDR must be host:port: %w", err)
+	}
+	return validatePort("LISTEN_ADDR port", port)
+}
+
+func validatePort(name, value string) error {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("%s must be an integer from 1 to 65535", name)
+	}
+	return nil
+}
+
 func durationFromEnv(name string, fallback time.Duration) (time.Duration, error) {
-	value := os.Getenv(name)
+	value := strings.TrimSpace(os.Getenv(name))
 	if value == "" {
 		return fallback, nil
 	}

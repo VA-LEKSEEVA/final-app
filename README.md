@@ -15,22 +15,27 @@
 ## Быстрый старт
 
 ```bash
+cp .env.example .env
+# Замените POSTGRES_PASSWORD в .env
 docker compose up --build
 ```
 
 Приложение будет доступно на `http://localhost:8080`.
 
-Для production обязательно задайте собственный пароль:
-
-```bash
-POSTGRES_PASSWORD='strong-password' docker compose up --build -d
-```
+`POSTGRES_PASSWORD` не имеет небезопасного значения по умолчанию: Compose
+остановится с понятной ошибкой, если пароль не задан.
 
 ## Конфигурация
 
 | Переменная | Обязательна | По умолчанию | Назначение |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | да | — | PostgreSQL DSN |
+| `DATABASE_URL` | условно | — | PostgreSQL DSN; имеет приоритет над `DB_*` |
+| `DB_HOST` | условно | — | Хост PostgreSQL, если `DATABASE_URL` не задан |
+| `DB_PORT` | нет | `5432` | Порт PostgreSQL |
+| `DB_USER` | условно | — | Пользователь PostgreSQL при конфигурации через `DB_*` |
+| `DB_PASSWORD` | нет | — | Пароль PostgreSQL при конфигурации через `DB_*` |
+| `DB_NAME` | условно | — | Имя базы при конфигурации через `DB_*` |
+| `DB_SSLMODE` | нет | `disable` | Режим SSL при конфигурации через `DB_*` |
 | `LISTEN_ADDR` | нет | `:8080` | Адрес HTTP-сервера |
 | `LOG_LEVEL` | нет | `INFO` | Уровень логов |
 | `STARTUP_TIMEOUT` | нет | `60s` | Ожидание PostgreSQL |
@@ -64,4 +69,33 @@ gofmt -w .
 go vet ./...
 go test -race ./...
 go build ./...
+actionlint
+docker compose config
 ```
+
+## CI/CD
+
+Workflow `.github/workflows/ci.yml`:
+
+1. запускает форматирование, `go vet`, сборку и `golangci-lint`;
+2. выполняет тесты с PostgreSQL и сохраняет coverage;
+3. собирает и smoke-тестирует Docker-образ на pull request и push;
+4. только для push в `main` проверяет Yandex Container Registry, публикует
+   immutable-тег `${GITHUB_SHA}` и `latest`;
+5. после успешной публикации обновляет `.image.repository` и `.image.tag` в
+   единственном `prod.yaml` GitOps-репозитория.
+
+Нужны GitHub Actions secrets:
+
+| Secret | Значение |
+| --- | --- |
+| `YC_REGISTRY_ID` | ID существующего Yandex Container Registry вида `crp...`/`cr...`, **не имя** реестра |
+| `YC_SA_KEY` | полный JSON авторизованного ключа service account |
+| `GITOPS_REPO` | `owner/repository` или HTTPS URL GitHub-репозитория |
+| `GITOPS_TOKEN` | fine-grained PAT с правом `Contents: Read and write` для GitOps-репозитория |
+
+Service account из `YC_SA_KEY` должен иметь право читать реестр и загружать
+Docker-образы. Сам реестр должен существовать: pipeline намеренно не создаёт
+cloud-ресурсы автоматически и завершится до `docker push` с точной диагностикой,
+если `YC_REGISTRY_ID` пуст, имеет неверный формат, указывает на удалённый реестр
+или недоступен service account.

@@ -24,6 +24,8 @@ const (
 	dbTimeout       = 3 * time.Second
 )
 
+var errMultipleJSONValues = errors.New("multiple JSON values")
+
 type Server struct {
 	DB     *sql.DB
 	Log    *slog.Logger
@@ -89,7 +91,7 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) {
 	messages, err := db.ListMessagesContext(ctx, s.DB)
 	if err != nil {
 		s.logger().Error("list messages failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeDatabaseError(w, err)
 		return
 	}
 
@@ -126,7 +128,7 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := ensureSingleJSONValue(decoder); err != nil {
-		writeError(w, http.StatusBadRequest, "request body must contain one JSON object")
+		s.handleDecodeError(w, err)
 		return
 	}
 
@@ -140,6 +142,10 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "author and text must be valid UTF-8")
 		return
 	}
+	if strings.ContainsRune(input.Author, '\x00') || strings.ContainsRune(input.Text, '\x00') {
+		writeError(w, http.StatusBadRequest, "author and text contain unsupported characters")
+		return
+	}
 	if utf8.RuneCountInString(input.Author) > maxAuthorLength ||
 		utf8.RuneCountInString(input.Text) > maxTextLength {
 		writeError(w, http.StatusBadRequest, "fields are too long")
@@ -151,11 +157,15 @@ func (s *Server) createMessage(w http.ResponseWriter, r *http.Request) {
 	msg, err := db.CreateMessageContext(ctx, s.DB, input.Author, input.Text)
 	if err != nil {
 		s.logger().Error("create message failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
+		writeDatabaseError(w, err)
 		return
 	}
 
-	metrics.MessagesTotal.Inc()
+	if count, err := db.CountMessagesContext(ctx, s.DB); err == nil {
+		metrics.MessagesTotal.Set(float64(count))
+	} else {
+		s.logger().Warn("count messages after create failed", "err", err)
+	}
 	writeJSON(w, http.StatusCreated, msg)
 }
 
@@ -166,6 +176,8 @@ func (s *Server) handleDecodeError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusRequestEntityTooLarge, "request body is too large")
 	case errors.Is(err, io.EOF):
 		writeError(w, http.StatusBadRequest, "request body is required")
+	case errors.Is(err, errMultipleJSONValues):
+		writeError(w, http.StatusBadRequest, "request body must contain one JSON object")
 	default:
 		writeError(w, http.StatusBadRequest, "invalid JSON")
 	}
@@ -173,13 +185,14 @@ func (s *Server) handleDecodeError(w http.ResponseWriter, err error) {
 
 func ensureSingleJSONValue(decoder *json.Decoder) error {
 	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
 	}
-	return nil
+	if err == nil {
+		return errMultipleJSONValues
+	}
+	return err
 }
 
 func (s *Server) logger() *slog.Logger {
@@ -193,10 +206,24 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
+func writeDatabaseError(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		writeError(w, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
+	var body strings.Builder
+	if err := json.NewEncoder(&body).Encode(value); err != nil {
+		slog.Default().Error("failed to encode JSON response", "err", err)
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		slog.Default().Error("failed to encode JSON response", "err", err)
+	if _, err := io.WriteString(w, body.String()); err != nil {
+		slog.Default().Error("failed to write JSON response", "err", err)
 	}
 }

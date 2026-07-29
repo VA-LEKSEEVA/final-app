@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -107,6 +108,7 @@ func RecoveryMiddleware(log *slog.Logger, next http.Handler) http.Handler {
 					"method", r.Method,
 					"path", r.URL.Path,
 					"panic", recovered,
+					"stack", string(debug.Stack()),
 				)
 				if sw, ok := w.(*statusWriter); ok && sw.wroteHeader {
 					return

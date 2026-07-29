@@ -143,6 +143,10 @@ button.secondary {
 .status.success { color: #087f5b; }
 .status.error { color: #c92a2a; }
 
+#list-status {
+    margin: 0 0 10px;
+}
+
 .section-heading {
     display: flex;
     align-items: center;

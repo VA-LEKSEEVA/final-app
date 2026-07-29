@@ -23,6 +23,7 @@ func TestPostgresMessageLifecycle(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	database.SetMaxOpenConns(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -96,6 +97,7 @@ func TestPostgresListLimitAndDeterministicOrder(t *testing.T) {
 		t.Fatalf("open database: %v", err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
+	database.SetMaxOpenConns(1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

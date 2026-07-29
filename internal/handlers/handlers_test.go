@@ -27,7 +27,9 @@ func TestCreateMessageValidation(t *testing.T) {
 		{name: "invalid JSON", body: `{`, status: http.StatusBadRequest, error: "invalid JSON"},
 		{name: "unknown field", body: `{"author":"A","text":"B","admin":true}`, status: http.StatusBadRequest, error: "invalid JSON"},
 		{name: "multiple values", body: `{"author":"A","text":"B"} {}`, status: http.StatusBadRequest, error: "request body must contain one JSON object"},
+		{name: "invalid trailing JSON", body: `{"author":"A","text":"B"} {`, status: http.StatusBadRequest, error: "invalid JSON"},
 		{name: "blank author", body: `{"author":"  ","text":"B"}`, status: http.StatusBadRequest, error: "author and text are required"},
+		{name: "NUL character", body: `{"author":"A","text":"bad\u0000text"}`, status: http.StatusBadRequest, error: "author and text contain unsupported characters"},
 		{name: "long author by runes", body: `{"author":"` + strings.Repeat("я", 101) + `","text":"B"}`, status: http.StatusBadRequest, error: "fields are too long"},
 		{name: "long text by runes", body: `{"author":"A","text":"` + strings.Repeat("я", 1001) + `"}`, status: http.StatusBadRequest, error: "fields are too long"},
 	}

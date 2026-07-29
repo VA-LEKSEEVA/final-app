@@ -1,41 +1,72 @@
+---
 name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
-  REGISTRY: cr.yandex/${{ secrets.YC_REGISTRY_ID }}
-  IMAGE: guestbook
-  TAG: ${{ github.sha }}
+  GO_VERSION: "1.23.x"
+  GOLANGCI_LINT_VERSION: v1.62.2
+  YC_CLI_VERSION: 1.21.0
+  YQ_VERSION: v4.44.3
+  YQ_LINUX_AMD64_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
+  IMAGE_NAME: guestbook
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
-          go-version: '1.23'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Download dependencies
         run: go mod download
 
-      - name: Lint
+      - name: Static checks
         run: |
-          set -x
-          go vet -v ./...
-          test -z "$(gofmt -l .)"
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          golangci-lint run ./...
+          set -euo pipefail
+          unformatted="$(gofmt -l -- .)"
+          if [[ -n "$unformatted" ]]; then
+            printf 'The following files are not formatted:\n%s\n' "$unformatted"
+            exit 1
+          fi
+          go vet ./...
+          go build ./...
+          POSTGRES_PASSWORD=ci-only docker compose config --quiet
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84  # v6
+        with:
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
+          args: --timeout=5m
 
   test:
     name: Test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres:16-alpine
@@ -46,97 +77,270 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
+          --health-cmd "pg_isready -U app -d guestbook"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 12
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:
-          go-version: '1.23'
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Run tests
         env:
           DATABASE_URL: postgres://app:secret@localhost:5432/guestbook?sslmode=disable
-        run: go test -v ./...
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./...
 
-  build-and-push:
-    name: Build & Push
-    runs-on: ubuntu-latest
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.out
+          if-no-files-found: warn
+          retention-days: 14
+
+  build-image:
+    name: Build image
+    runs-on: ubuntu-24.04
     needs: [lint, test]
+    timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
-      - name: Install yc CLI
+      - name: Build Docker image
         run: |
-          curl https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash
-          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
+          set -euo pipefail
+          docker build \
+            --build-arg VERSION="${GITHUB_SHA}" \
+            --build-arg COMMIT="${GITHUB_SHA}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --tag "${IMAGE_NAME}:${GITHUB_SHA}" \
+            .
+
+      - name: Smoke-test image metadata
+        run: |
+          set -euo pipefail
+          docker run --rm "${IMAGE_NAME}:${GITHUB_SHA}" -version
+
+      - name: Export image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          docker save "${IMAGE_NAME}:${GITHUB_SHA}" |
+            gzip -1 > /tmp/guestbook-image.tar.gz
+
+      - name: Upload image artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: guestbook-image-${{ github.sha }}
+          path: /tmp/guestbook-image.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-image:
+    name: Publish image
+    runs-on: ubuntu-24.04
+    needs: build-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 15
+    outputs:
+      image: ${{ steps.registry.outputs.image }}
+    steps:
+      - name: Validate deployment secrets
+        id: deployment
+        env:
+          YC_REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
+          YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
+        run: |
+          set -euo pipefail
+          [[ -n "$YC_REGISTRY_ID" ]] || {
+            echo "::error title=Missing secret::YC_REGISTRY_ID is not configured"
+            exit 1
+          }
+          [[ "$YC_REGISTRY_ID" =~ ^cr[a-z0-9]{18}$ ]] || {
+            echo "::error title=Invalid registry ID::YC_REGISTRY_ID must be the Yandex Container Registry ID (for example crp...), not its display name"
+            exit 1
+          }
+          echo "registry_id=$YC_REGISTRY_ID" >> "$GITHUB_OUTPUT"
+          [[ -n "$YC_SA_KEY" ]] || {
+            echo "::error title=Missing secret::YC_SA_KEY is not configured"
+            exit 1
+          }
+          jq -e '
+            type == "object"
+            and (.id | type == "string" and length > 0)
+            and (.service_account_id | type == "string" and length > 0)
+            and (.private_key | type == "string" and length > 0)
+          ' <<<"$YC_SA_KEY" >/dev/null || {
+            echo "::error title=Invalid service-account key::YC_SA_KEY must contain the complete authorized-key JSON"
+            exit 1
+          }
+
+      - name: Download image artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+        with:
+          name: guestbook-image-${{ github.sha }}
+          path: /tmp
+
+      - name: Load Docker image
+        run: |
+          set -euo pipefail
+          gzip -dc /tmp/guestbook-image.tar.gz | docker load
+
+      - name: Install Yandex Cloud CLI
+        env:
+          CLI_VERSION: ${{ env.YC_CLI_VERSION }}
+        run: |
+          set -euo pipefail
+          curl --fail --show-error --silent --location \
+            --retry 5 --retry-all-errors \
+            https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
+            --output /tmp/install-yc.sh
+          bash /tmp/install-yc.sh -n -i "$RUNNER_TEMP/yandex-cloud"
+          echo "$RUNNER_TEMP/yandex-cloud/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate to Yandex Cloud
         env:
           YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
         run: |
-          echo "$YC_SA_KEY" | tr -d '\r' > /tmp/sa-key.json
-          cat /tmp/sa-key.json | jq . > /dev/null || { echo "Invalid JSON"; exit 1; }
-          yc config set service-account-key /tmp/sa-key.json
+          set -euo pipefail
+          printf '%s' "$YC_SA_KEY" > "$RUNNER_TEMP/sa-key.json"
+          chmod 600 "$RUNNER_TEMP/sa-key.json"
+          yc config set service-account-key "$RUNNER_TEMP/sa-key.json"
           yc container registry configure-docker
 
-      - name: Build Docker image
+      - name: Validate registry
+        id: registry
+        env:
+          YC_REGISTRY_ID: ${{ steps.deployment.outputs.registry_id }}
         run: |
-          docker build -t $REGISTRY/$IMAGE:$TAG -t $REGISTRY/$IMAGE:latest .
+          set -euo pipefail
+          if ! registry_json="$(yc container registry get \
+            --id "$YC_REGISTRY_ID" \
+            --format json 2>&1)"; then
+            echo "::error title=Registry is unavailable::YC_REGISTRY_ID does not identify an existing registry accessible to the configured service account. Create/restore the registry or replace the GitHub secret with its current ID."
+            printf '%s\n' "$registry_json"
+            exit 1
+          fi
+          registry_id="$(jq -er '.id' <<<"$registry_json")"
+          [[ "$registry_id" == "$YC_REGISTRY_ID" ]] || {
+            echo "::error title=Registry mismatch::Yandex Cloud returned an unexpected registry ID"
+            exit 1
+          }
+          image="cr.yandex/${registry_id}/${IMAGE_NAME}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
 
-      - name: Push Docker image
+      - name: Tag and push Docker image
+        env:
+          IMAGE: ${{ steps.registry.outputs.image }}
         run: |
-          docker push $REGISTRY/$IMAGE:$TAG
-          docker push $REGISTRY/$IMAGE:latest
-
+          set -euo pipefail
+          docker tag "${IMAGE_NAME}:${GITHUB_SHA}" "${IMAGE}:${GITHUB_SHA}"
+          docker tag "${IMAGE_NAME}:${GITHUB_SHA}" "${IMAGE}:latest"
+          docker push "${IMAGE}:${GITHUB_SHA}"
+          docker push "${IMAGE}:latest"
 
   update-gitops:
     name: Update GitOps repo
-    runs-on: ubuntu-latest
-    needs: build-and-push
+    runs-on: ubuntu-24.04
+    needs: publish-image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 10
     steps:
-      - name: Checkout GitOps repo
+      - name: Validate GitOps secrets
+        id: gitops
         env:
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
           GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
         run: |
-          REPO_CLEAN=${GITOPS_REPO#https://}
-          git clone --branch main https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} /tmp/gitops
+          set -euo pipefail
+          [[ -n "$GITOPS_TOKEN" ]] || {
+            echo "::error title=Missing secret::GITOPS_TOKEN is not configured"
+            exit 1
+          }
+          [[ -n "$GITOPS_REPO" ]] || {
+            echo "::error title=Missing secret::GITOPS_REPO is not configured"
+            exit 1
+          }
+          repo="${GITOPS_REPO%.git}"
+          repo="${repo#https://github.com/}"
+          repo="${repo#http://github.com/}"
+          repo="${repo#github.com/}"
+          [[ "$repo" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
+            echo "::error title=Invalid repository::GITOPS_REPO must be owner/repo or a GitHub HTTPS URL"
+            exit 1
+          }
+          echo "repository=$repo" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout GitOps repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          repository: ${{ steps.gitops.outputs.repository }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          ref: main
+          path: gitops
+          fetch-depth: 1
 
       - name: Install yq
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
-          yq --version
+          set -euo pipefail
+          curl --fail --show-error --silent --location \
+            --retry 5 --retry-all-errors \
+            "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64" \
+            --output "$RUNNER_TEMP/yq"
+          echo "${YQ_LINUX_AMD64_SHA256}  $RUNNER_TEMP/yq" |
+            sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/yq"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Bump image tag in prod.yaml
+      - name: Update production image
+        working-directory: gitops
         env:
-          TAG: ${{ github.sha }}
+          IMAGE: ${{ needs.publish-image.outputs.image }}
         run: |
-          cd /tmp/gitops
-          PROD_PATH=$(find . -name "prod.yaml" | head -1)
-          if [ -z "$PROD_PATH" ]; then
-            echo "❌ prod.yaml не найден"
+          set -euo pipefail
+          mapfile -d '' prod_files < <(
+            find . -type f -name prod.yaml -not -path './.git/*' -print0
+          )
+          if (( ${#prod_files[@]} == 0 )); then
+            echo "::error title=Missing manifest::prod.yaml was not found in the GitOps repository"
             exit 1
           fi
-          echo "✅ Найден: $PROD_PATH"
-          yq eval -i ".image.tag = \"$TAG\"" "$PROD_PATH"
+          if (( ${#prod_files[@]} > 1 )); then
+            printf 'Found multiple prod.yaml files:\n'
+            printf '  %s\n' "${prod_files[@]}"
+            echo "::error title=Ambiguous manifest::Set an unambiguous prod.yaml location in the GitOps repository"
+            exit 1
+          fi
+
+          prod_path="${prod_files[0]}"
+          yq eval -e '.image | type == "!!map"' "$prod_path" >/dev/null || {
+            echo "::error title=Invalid manifest::.image must be a mapping in $prod_path"
+            exit 1
+          }
+          IMAGE="$IMAGE" TAG="$GITHUB_SHA" yq eval -i '
+            .image.repository = strenv(IMAGE) |
+            .image.tag = strenv(TAG)
+          ' "$prod_path"
 
       - name: Commit and push
-        env:
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
-          GITOPS_REPO: ${{ secrets.GITOPS_REPO }}
+        working-directory: gitops
         run: |
-          REPO_CLEAN=${GITOPS_REPO#https://}
-          cd /tmp/gitops
-          git config --global user.email "ci@example.com"
-          git config --global user.name "CI Bot"
-          git add .
-          git commit -m "Bump guestbook to ${{ github.sha }} [skip ci]" || echo "No changes"
-          git push https://oauth2:${GITOPS_TOKEN}@${REPO_CLEAN} main
+          set -euo pipefail
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          if git diff --quiet; then
+            echo "GitOps manifest is already up to date"
+            exit 0
+          fi
+          git add --all
+          git commit -m "Deploy guestbook ${GITHUB_SHA} [skip ci]"
+          git push origin HEAD:main
