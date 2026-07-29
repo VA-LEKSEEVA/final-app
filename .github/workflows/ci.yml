@@ -500,6 +500,7 @@ jobs:
             terraform -chdir=final-infra/terraform/envs/prod apply \
               -auto-approve \
               -input=false \
+              -lock=false \
               -var-file="$TF_VARS_FILE"
           } 2>&1 | tee "$terraform_log"
           terraform_status="${PIPESTATUS[0]}"
