@@ -457,24 +457,23 @@ jobs:
             echo "TF_VARS_FILE=$RUNNER_TEMP/production.tfvars"
           } >> "$GITHUB_ENV"
 
-      - name: Create temporary Object Storage backend credentials
-        id: backend
+      - name: Issue temporary Object Storage backend credentials
         run: |
           set -euo pipefail
-          service_account_id="$(jq -er '.service_account_id' "$YC_SERVICE_ACCOUNT_KEY_FILE")"
-          key_json="$(yc iam access-key create \
-            --service-account-id "$service_account_id" \
-            --description "GitHub Actions Terraform backend ${GITHUB_RUN_ID}" \
+          key_json="$(yc iam access-key issue-ephemeral \
+            --session-name "github-actions-${GITHUB_RUN_ID}" \
+            --duration 2h \
             --format json)"
-          access_key_id="$(jq -er '.access_key.key_id' <<<"$key_json")"
-          access_key_resource_id="$(jq -er '.access_key.id' <<<"$key_json")"
-          secret_access_key="$(jq -er '.secret' <<<"$key_json")"
+          access_key_id="$(jq -er '.access_key_id // .access_key.key_id' <<<"$key_json")"
+          secret_access_key="$(jq -er '.secret // .secret_access_key' <<<"$key_json")"
+          session_token="$(jq -er '.session_token // .token' <<<"$key_json")"
           echo "::add-mask::$access_key_id"
           echo "::add-mask::$secret_access_key"
+          echo "::add-mask::$session_token"
           {
             echo "AWS_ACCESS_KEY_ID=$access_key_id"
             echo "AWS_SECRET_ACCESS_KEY=$secret_access_key"
-            echo "BACKEND_ACCESS_KEY_RESOURCE_ID=$access_key_resource_id"
+            echo "AWS_SESSION_TOKEN=$session_token"
           } >> "$GITHUB_ENV"
 
       - name: Discover DNS zone and prepare Terraform variables
@@ -550,9 +549,3 @@ jobs:
 
       - name: Verify backup
         run: make -C final-infra backup-check TF_VARS_FILE="$TF_VARS_FILE"
-
-      - name: Remove temporary backend access key
-        if: always() && env.BACKEND_ACCESS_KEY_RESOURCE_ID != ''
-        run: |
-          set -euo pipefail
-          yc iam access-key delete --id "$BACKEND_ACCESS_KEY_RESOURCE_ID"
