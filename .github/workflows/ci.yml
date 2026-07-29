@@ -491,13 +491,29 @@ jobs:
       - name: Apply Terraform infrastructure
         run: |
           set -euo pipefail
-          terraform -chdir=final-infra/terraform/envs/prod init \
-            -reconfigure \
-            -input=false
-          make -C final-infra tf-apply \
-            TF_VARS_FILE="$TF_VARS_FILE" \
-            APP_HOST="$APP_HOST" \
-            GITOPS_URL="$GITOPS_URL"
+          terraform_log="$RUNNER_TEMP/terraform-apply.log"
+          set +e
+          {
+            terraform -chdir=final-infra/terraform/envs/prod init \
+              -reconfigure \
+              -input=false &&
+            terraform -chdir=final-infra/terraform/envs/prod apply \
+              -auto-approve \
+              -input=false \
+              -var-file="$TF_VARS_FILE"
+          } 2>&1 | tee "$terraform_log"
+          terraform_status="${PIPESTATUS[0]}"
+          set -e
+          if ((terraform_status != 0)); then
+            error_message="$(
+              tail -n 25 "$terraform_log" |
+                sed -E $'s/\x1b\\[[0-9;]*[mK]//g' |
+                tr '\n' ' ' |
+                cut -c1-4000
+            )"
+            echo "::error title=Terraform deployment failed::$error_message"
+            exit "$terraform_status"
+          fi
 
       - name: Resolve a production hostname
         id: hostname
