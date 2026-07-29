@@ -1,46 +1,113 @@
 package db
 
 import (
+	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
-	_ "github.com/lib/pq" // драйвер PostgreSQL (инициализируется автоматически)
+	_ "github.com/lib/pq"
 )
 
-// Connect устанавливает соединение с БД и выполняет ретраи
+const (
+	defaultMaxOpenConns    = 20
+	defaultMaxIdleConns    = 5
+	defaultConnMaxLifetime = 5 * time.Minute
+	defaultConnMaxIdleTime = time.Minute
+	defaultConnectTimeout  = 60 * time.Second
+	retryInterval          = 2 * time.Second
+	pingTimeout            = 3 * time.Second
+)
+
+// Connect opens a PostgreSQL connection pool and waits for the database to
+// become available. It is kept for backwards compatibility; new callers
+// should prefer ConnectContext so startup can be cancelled.
 func Connect(dsn string) (*sql.DB, error) {
-	db, err := sql.Open("postgres", dsn)
-	if err != nil {
-		return nil, err
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultConnectTimeout)
+	defer cancel()
 
-	// Настройка пула соединений (важно для производительности)
-	db.SetMaxOpenConns(20)                 // максимум открытых соединений
-	db.SetMaxIdleConns(5)                  // максимум простаивающих
-	db.SetConnMaxLifetime(5 * time.Minute) // время жизни соединения
-
-	// Ретраи на старте — ждём, пока БД поднимется (до 60 секунд)
-	for i := 0; i < 30; i++ {
-		if err := db.Ping(); err == nil {
-			return db, nil
-		}
-		time.Sleep(2 * time.Second)
-	}
-	return nil, fmt.Errorf("database not ready after 60 seconds")
+	return ConnectContext(ctx, dsn)
 }
 
-// Migrate создаёт таблицу messages и индекс, если их нет
-func Migrate(db *sql.DB) error {
-	schema := `
-        CREATE TABLE IF NOT EXISTS messages (
-            id SERIAL PRIMARY KEY,
-            author TEXT NOT NULL,
-            text TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at DESC);
-    `
-	_, err := db.Exec(schema)
-	return err
+// ConnectContext opens and configures a PostgreSQL connection pool, retrying
+// until the database responds or ctx is cancelled.
+func ConnectContext(ctx context.Context, dsn string) (*sql.DB, error) {
+	if ctx == nil {
+		return nil, errors.New("database context is nil")
+	}
+	if strings.TrimSpace(dsn) == "" {
+		return nil, errors.New("database DSN is empty")
+	}
+
+	database, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	database.SetMaxOpenConns(defaultMaxOpenConns)
+	database.SetMaxIdleConns(defaultMaxIdleConns)
+	database.SetConnMaxLifetime(defaultConnMaxLifetime)
+	database.SetConnMaxIdleTime(defaultConnMaxIdleTime)
+
+	var lastErr error
+	for {
+		attemptCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+		lastErr = database.PingContext(attemptCtx)
+		cancel()
+		if lastErr == nil {
+			return database, nil
+		}
+
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			_ = database.Close()
+			return nil, fmt.Errorf("database not ready (last error: %v): %w", lastErr, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// Migrate applies the database schema using a transaction.
+func Migrate(database *sql.DB) error {
+	return MigrateContext(context.Background(), database)
+}
+
+// MigrateContext applies the database schema using a transaction.
+func MigrateContext(ctx context.Context, database *sql.DB) error {
+	if database == nil {
+		return errors.New("database is nil")
+	}
+
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration: %w", err)
+	}
+	defer func() {
+		_ = tx.Rollback()
+	}()
+
+	const schema = `
+		CREATE TABLE IF NOT EXISTS messages (
+			id SERIAL PRIMARY KEY,
+			author TEXT NOT NULL,
+			text TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		);
+		CREATE INDEX IF NOT EXISTS idx_messages_created_at_id
+			ON messages(created_at DESC, id DESC);
+		DROP INDEX IF EXISTS idx_messages_created_at;
+	`
+	if _, err := tx.ExecContext(ctx, schema); err != nil {
+		return fmt.Errorf("apply migration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration: %w", err)
+	}
+	return nil
 }
