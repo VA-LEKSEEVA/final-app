@@ -1,0 +1,17 @@
+.terraform/
+terraform.rc
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform.tfvars
+*.auto.tfvars
+crash.log
+
+kubeconfig
+known_hosts
+terraform/envs/prod/inventory.ini
+.backup-secret.*.yaml
+.backup-secret.*.env
+.runtime-secret.*.yaml
+.runtime-secret.*.env
+runtime-secrets.env

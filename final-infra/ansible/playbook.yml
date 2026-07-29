@@ -1,0 +1,334 @@
+---
+- name: Prepare all k3s nodes
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Validate required bootstrap variables
+      ansible.builtin.assert:
+        that:
+          - gitops_repo_url is defined
+          - gitops_repo_url | length > 0
+          - app_host is defined
+          - app_host | length > 0
+          - kubeconfig_path is defined
+          - kubeconfig_path | length > 0
+        fail_msg: gitops_repo_url, app_host, and kubeconfig_path are required
+      run_once: true
+
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - python3
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create k3s configuration directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+- name: Install k3s server
+  hosts: k3s_server
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  tasks:
+    - name: Render k3s server configuration
+      ansible.builtin.template:
+        src: templates/k3s-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart k3s
+
+    - name: Install pinned k3s server version
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+        checksum: "sha256:https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/sha256sum-amd64.txt"
+        dest: /usr/local/bin/k3s
+        owner: root
+        group: root
+        mode: "0755"
+      register: k3s_server_binary
+
+    - name: Install k3s server systemd unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Lightweight Kubernetes
+          Documentation=https://k3s.io
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=notify
+          EnvironmentFile=-/etc/default/%N
+          KillMode=process
+          Delegate=yes
+          LimitNOFILE=1048576
+          LimitNPROC=infinity
+          LimitCORE=infinity
+          TasksMax=infinity
+          TimeoutStartSec=0
+          Restart=always
+          RestartSec=5s
+          ExecStartPre=-/sbin/modprobe br_netfilter
+          ExecStartPre=-/sbin/modprobe overlay
+          ExecStart=/usr/local/bin/k3s server
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/k3s.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: k3s_server_unit
+
+    - name: Reload systemd for k3s server
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: k3s_server_unit.changed
+
+    - name: Ensure k3s is enabled and started
+      ansible.builtin.systemd:
+        name: k3s
+        enabled: true
+        state: "{{ 'restarted' if k3s_server_binary.changed or k3s_server_unit.changed else 'started' }}"
+
+    - name: Wait for Kubernetes API
+      ansible.builtin.command: k3s kubectl get --raw=/readyz
+      register: api_ready
+      retries: 60
+      delay: 5
+      until: api_ready.rc == 0
+      changed_when: false
+
+    - name: Read k3s node token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: node_token
+      no_log: true
+
+    - name: Store node token for agents
+      ansible.builtin.set_fact:
+        k3s_node_token: "{{ node_token.content | b64decode | trim }}"
+      no_log: true
+
+  handlers:
+    - name: Restart k3s
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+
+- name: Install k3s agents
+  hosts: k3s_agents
+  become: true
+  gather_facts: true
+  any_errors_fatal: true
+  serial: 1
+  tasks:
+    - name: Render k3s agent configuration
+      ansible.builtin.template:
+        src: templates/k3s-config.yaml.j2
+        dest: /etc/rancher/k3s/config.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      notify: Restart k3s agent
+
+    - name: Install pinned k3s agent version
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/k3s"
+        checksum: "sha256:https://github.com/k3s-io/k3s/releases/download/{{ k3s_version }}/sha256sum-amd64.txt"
+        dest: /usr/local/bin/k3s
+        owner: root
+        group: root
+        mode: "0755"
+      register: k3s_agent_binary
+
+    - name: Install k3s agent systemd unit
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Lightweight Kubernetes Agent
+          Documentation=https://k3s.io
+          Wants=network-online.target
+          After=network-online.target
+
+          [Service]
+          Type=exec
+          EnvironmentFile=-/etc/default/%N
+          KillMode=process
+          Delegate=yes
+          LimitNOFILE=1048576
+          LimitNPROC=infinity
+          LimitCORE=infinity
+          TasksMax=infinity
+          TimeoutStartSec=0
+          Restart=always
+          RestartSec=5s
+          ExecStartPre=-/sbin/modprobe br_netfilter
+          ExecStartPre=-/sbin/modprobe overlay
+          ExecStart=/usr/local/bin/k3s agent
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/k3s-agent.service
+        owner: root
+        group: root
+        mode: "0644"
+      register: k3s_agent_unit
+
+    - name: Reload systemd for k3s agent
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: k3s_agent_unit.changed
+
+    - name: Ensure k3s agent is enabled and started
+      ansible.builtin.systemd:
+        name: k3s-agent
+        enabled: true
+        state: "{{ 'restarted' if k3s_agent_binary.changed or k3s_agent_unit.changed else 'started' }}"
+
+  handlers:
+    - name: Restart k3s agent
+      ansible.builtin.systemd:
+        name: k3s-agent
+        state: restarted
+
+- name: Export kubeconfig and bootstrap Argo CD
+  hosts: k3s_server
+  become: true
+  gather_facts: false
+  any_errors_fatal: true
+  tasks:
+    - name: Read server kubeconfig
+      ansible.builtin.slurp:
+        src: /etc/rancher/k3s/k3s.yaml
+      register: remote_kubeconfig
+      no_log: true
+
+    - name: Write local kubeconfig with public server address
+      ansible.builtin.copy:
+        content: >-
+          {{
+            (remote_kubeconfig.content | b64decode) |
+            regex_replace('https://127\\.0\\.0\\.1:6443', 'https://' ~ ansible_host ~ ':6443')
+          }}
+        dest: "{{ kubeconfig_path }}"
+        mode: "0600"
+      delegate_to: localhost
+      become: false
+      no_log: true
+
+    - name: Create Argo CD namespace
+      ansible.builtin.command: >-
+        k3s kubectl create namespace {{ argocd_namespace }}
+        --dry-run=client -o yaml
+      register: argocd_namespace_manifest
+      changed_when: false
+
+    - name: Apply Argo CD namespace
+      ansible.builtin.command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ argocd_namespace_manifest.stdout }}"
+      changed_when: "'configured' in argocd_namespace_apply.stdout or 'created' in argocd_namespace_apply.stdout"
+      register: argocd_namespace_apply
+
+    - name: Download pinned Argo CD install manifest
+      ansible.builtin.get_url:
+        url: "https://raw.githubusercontent.com/argoproj/argo-cd/{{ argocd_version }}/manifests/install.yaml"
+        checksum: "sha256:{{ argocd_install_sha256 }}"
+        dest: "/tmp/argocd-install-{{ argocd_version }}.yaml"
+        mode: "0644"
+
+    - name: Install Argo CD
+      ansible.builtin.command: >-
+        k3s kubectl apply -n {{ argocd_namespace }}
+        -f /tmp/argocd-install-{{ argocd_version }}.yaml
+      register: argocd_install
+      changed_when: "'configured' in argocd_install.stdout or 'created' in argocd_install.stdout"
+
+    - name: Wait for Argo CD server deployment
+      ansible.builtin.command: >-
+        k3s kubectl -n {{ argocd_namespace }}
+        rollout status deployment/argocd-server --timeout=300s
+      changed_when: false
+
+    - name: Render private GitOps repository Secret
+      ansible.builtin.template:
+        src: templates/repository-secret.yaml.j2
+        dest: /tmp/final-gitops-repository.yaml
+        owner: root
+        group: root
+        mode: "0600"
+      when: gitops_token | length > 0
+      no_log: true
+
+    - name: Apply private GitOps repository Secret
+      ansible.builtin.command: k3s kubectl apply -f /tmp/final-gitops-repository.yaml
+      when: gitops_token | length > 0
+      no_log: true
+      changed_when: true
+
+    - name: Remove private GitOps repository Secret manifest
+      ansible.builtin.file:
+        path: /tmp/final-gitops-repository.yaml
+        state: absent
+      no_log: true
+
+    - name: Render root Application
+      ansible.builtin.template:
+        src: templates/root-application.yaml.j2
+        dest: /tmp/final-root-application.yaml
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Create platform configuration namespace
+      ansible.builtin.command: >-
+        k3s kubectl create namespace platform-config
+        --dry-run=client -o yaml
+      register: platform_config_namespace
+      changed_when: false
+
+    - name: Apply platform configuration namespace
+      ansible.builtin.command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ platform_config_namespace.stdout }}"
+      register: platform_config_namespace_apply
+      changed_when: "'configured' in platform_config_namespace_apply.stdout or 'created' in platform_config_namespace_apply.stdout"
+
+    - name: Publish real application host for GitOps manifests
+      ansible.builtin.command: >-
+        k3s kubectl -n platform-config create configmap final-infra-config
+        --from-literal=APP_HOST={{ app_host }}
+        --from-literal=GITOPS_REPO_URL={{ gitops_repo_url }}
+        --dry-run=client -o yaml
+      register: platform_config
+      changed_when: false
+
+    - name: Apply platform configuration
+      ansible.builtin.command: k3s kubectl apply -f -
+      args:
+        stdin: "{{ platform_config.stdout }}"
+      register: platform_config_apply
+      changed_when: "'configured' in platform_config_apply.stdout or 'created' in platform_config_apply.stdout"
+
+    - name: Apply root Application
+      ansible.builtin.command: k3s kubectl apply -f /tmp/final-root-application.yaml
+      register: root_application
+      changed_when: "'configured' in root_application.stdout or 'created' in root_application.stdout"

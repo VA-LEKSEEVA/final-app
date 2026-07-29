@@ -3,3 +3,13 @@ coverage.out
 *.log
 .env
 *.zip
+final-infra/.terraform/
+final-infra/**/.terraform/
+final-infra/**/terraform.rc
+final-infra/**/*.tfstate
+final-infra/**/*.tfstate.*
+final-infra/**/terraform.tfvars
+final-infra/**/inventory.ini
+final-infra/kubeconfig
+final-infra/known_hosts
+final-infra/runtime-secrets.env

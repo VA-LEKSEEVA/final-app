@@ -1,0 +1,20 @@
+# Copy to terraform.tfvars or pass TF_VARS_FILE=/absolute/path/to/prod.tfvars.
+# Never commit credentials or real private values.
+
+cloud_id  = "SET_REAL_CLOUD_ID"
+folder_id = "SET_REAL_FOLDER_ID"
+zone      = "ru-central1-a"
+
+cluster_name = "final-k3s"
+# Recommended: restrict SSH and the Kubernetes API to your real public IP/32.
+# admin_cidrs = ["YOUR.PUBLIC.IP.ADDRESS/32"]
+
+ssh_user             = "ubuntu"
+ssh_public_key_path  = "~/.ssh/id_ed25519.pub"
+ssh_private_key_path = "~/.ssh/id_ed25519"
+
+# Optional. If omitted, Terraform creates a globally unique name.
+# backup_bucket_name = "your-real-unique-backup-bucket"
+
+# Required for the first zero-touch bootstrap. Terraform creates APP_HOST A record.
+dns_zone_id = "SET_REAL_DNS_ZONE_ID"

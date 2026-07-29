@@ -1,0 +1,18 @@
+---
+{% if k3s_role == "server" %}
+write-kubeconfig-mode: "0600"
+tls-san:
+  - "{{ ansible_host }}"
+node-ip: "{{ k3s_private_ip | default(ansible_default_ipv4.address) }}"
+cluster-cidr: "{{ cluster_cidr }}"
+service-cidr: "{{ service_cidr }}"
+disable:
+  - traefik
+  - servicelb
+secrets-encryption: true
+protect-kernel-defaults: false
+{% else %}
+server: "https://{{ hostvars[groups['k3s_server'][0]].k3s_private_ip | default(hostvars[groups['k3s_server'][0]].ansible_host) }}:6443"
+token: "{{ hostvars[groups['k3s_server'][0]].k3s_node_token }}"
+node-ip: "{{ k3s_private_ip | default(ansible_default_ipv4.address) }}"
+{% endif %}
