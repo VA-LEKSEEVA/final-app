@@ -18,10 +18,10 @@ concurrency:
 env:
   GO_VERSION: "1.23.x"
   GOLANGCI_LINT_VERSION: v1.62.2
-  YC_CLI_VERSION: 1.21.0
   YQ_VERSION: v4.44.3
   YQ_LINUX_AMD64_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
   IMAGE_NAME: guestbook
+  REGISTRY: ghcr.io
 
 defaults:
   run:
@@ -151,39 +151,12 @@ jobs:
     needs: build-image
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
     outputs:
-      image: ${{ steps.registry.outputs.image }}
+      image: ${{ steps.image.outputs.repository }}
     steps:
-      - name: Validate deployment secrets
-        id: deployment
-        env:
-          YC_REGISTRY_ID: ${{ secrets.YC_REGISTRY_ID }}
-          YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
-        run: |
-          set -euo pipefail
-          [[ -n "$YC_REGISTRY_ID" ]] || {
-            echo "::error title=Missing secret::YC_REGISTRY_ID is not configured"
-            exit 1
-          }
-          [[ "$YC_REGISTRY_ID" =~ ^cr[a-z0-9]{18}$ ]] || {
-            echo "::error title=Invalid registry ID::YC_REGISTRY_ID must be the Yandex Container Registry ID (for example crp...), not its display name"
-            exit 1
-          }
-          echo "registry_id=$YC_REGISTRY_ID" >> "$GITHUB_OUTPUT"
-          [[ -n "$YC_SA_KEY" ]] || {
-            echo "::error title=Missing secret::YC_SA_KEY is not configured"
-            exit 1
-          }
-          jq -e '
-            type == "object"
-            and (.id | type == "string" and length > 0)
-            and (.service_account_id | type == "string" and length > 0)
-            and (.private_key | type == "string" and length > 0)
-          ' <<<"$YC_SA_KEY" >/dev/null || {
-            echo "::error title=Invalid service-account key::YC_SA_KEY must contain the complete authorized-key JSON"
-            exit 1
-          }
-
       - name: Download image artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
         with:
@@ -195,52 +168,24 @@ jobs:
           set -euo pipefail
           gzip -dc /tmp/guestbook-image.tar.gz | docker load
 
-      - name: Install Yandex Cloud CLI
-        env:
-          CLI_VERSION: ${{ env.YC_CLI_VERSION }}
+      - name: Resolve GHCR image name
+        id: image
         run: |
           set -euo pipefail
-          curl --fail --show-error --silent --location \
-            --retry 5 --retry-all-errors \
-            https://storage.yandexcloud.net/yandexcloud-yc/install.sh \
-            --output /tmp/install-yc.sh
-          bash /tmp/install-yc.sh -n -i "$RUNNER_TEMP/yandex-cloud"
-          echo "$RUNNER_TEMP/yandex-cloud/bin" >> "$GITHUB_PATH"
+          repository="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
 
-      - name: Authenticate to Yandex Cloud
+      - name: Sign in to GitHub Container Registry
         env:
-          YC_SA_KEY: ${{ secrets.YC_SA_KEY }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          printf '%s' "$YC_SA_KEY" > "$RUNNER_TEMP/sa-key.json"
-          chmod 600 "$RUNNER_TEMP/sa-key.json"
-          yc config set service-account-key "$RUNNER_TEMP/sa-key.json"
-          yc container registry configure-docker
-
-      - name: Validate registry
-        id: registry
-        env:
-          YC_REGISTRY_ID: ${{ steps.deployment.outputs.registry_id }}
-        run: |
-          set -euo pipefail
-          if ! registry_json="$(yc container registry get \
-            --id "$YC_REGISTRY_ID" \
-            --format json 2>&1)"; then
-            echo "::error title=Registry is unavailable::YC_REGISTRY_ID does not identify an existing registry accessible to the configured service account. Create/restore the registry or replace the GitHub secret with its current ID."
-            printf '%s\n' "$registry_json"
-            exit 1
-          fi
-          registry_id="$(jq -er '.id' <<<"$registry_json")"
-          [[ "$registry_id" == "$YC_REGISTRY_ID" ]] || {
-            echo "::error title=Registry mismatch::Yandex Cloud returned an unexpected registry ID"
-            exit 1
-          }
-          image="cr.yandex/${registry_id}/${IMAGE_NAME}"
-          echo "image=$image" >> "$GITHUB_OUTPUT"
+          printf '%s' "$GHCR_TOKEN" |
+            docker login "$REGISTRY" --username "$GITHUB_ACTOR" --password-stdin
 
       - name: Tag and push Docker image
         env:
-          IMAGE: ${{ steps.registry.outputs.image }}
+          IMAGE: ${{ steps.image.outputs.repository }}
         run: |
           set -euo pipefail
           docker tag "${IMAGE_NAME}:${GITHUB_SHA}" "${IMAGE}:${GITHUB_SHA}"

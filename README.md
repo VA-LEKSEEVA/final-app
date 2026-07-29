@@ -80,8 +80,9 @@ Workflow `.github/workflows/ci.yml`:
 1. запускает форматирование, `go vet`, сборку и `golangci-lint`;
 2. выполняет тесты с PostgreSQL и сохраняет coverage;
 3. собирает и smoke-тестирует Docker-образ на pull request и push;
-4. только для push в `main` проверяет Yandex Container Registry, публикует
-   immutable-тег `${GITHUB_SHA}` и `latest`;
+4. только для push в `main` публикует образ в GitHub Container Registry
+   (`ghcr.io/va-lekseeva/final-app`) с immutable-тегом `${GITHUB_SHA}` и
+   тегом `latest`;
 5. после успешной публикации обновляет `.image.repository` и `.image.tag` в
    единственном `prod.yaml` GitOps-репозитория.
 
@@ -89,13 +90,15 @@ Workflow `.github/workflows/ci.yml`:
 
 | Secret | Значение |
 | --- | --- |
-| `YC_REGISTRY_ID` | ID существующего Yandex Container Registry вида `crp...`/`cr...`, **не имя** реестра |
-| `YC_SA_KEY` | полный JSON авторизованного ключа service account |
 | `GITOPS_REPO` | `owner/repository` или HTTPS URL GitHub-репозитория |
 | `GITOPS_TOKEN` | fine-grained PAT с правом `Contents: Read and write` для GitOps-репозитория |
 
-Service account из `YC_SA_KEY` должен иметь право читать реестр и загружать
-Docker-образы. Сам реестр должен существовать: pipeline намеренно не создаёт
-cloud-ресурсы автоматически и завершится до `docker push` с точной диагностикой,
-если `YC_REGISTRY_ID` пуст, имеет неверный формат, указывает на удалённый реестр
-или недоступен service account.
+Для публикации в GHCR используется встроенный короткоживущий `GITHUB_TOKEN` с
+правом `packages: write`; отдельные registry credentials не нужны. Репозиторий
+публичный, поэтому связанный container package должен наследовать публичную
+видимость и скачиваться k3s без `imagePullSecret`. Если GitHub создаст package
+с ограниченной видимостью, один раз переключите его на `Public` в настройках
+Packages владельца `VA-LEKSEEVA`.
+
+Секреты `YC_REGISTRY_ID` и `YC_SA_KEY` больше не используются workflow и могут
+быть удалены из настроек репозитория.
