@@ -144,7 +144,7 @@ for ip in $(jq -r '.[] | .public_ip // .ip // empty' <<<"$nodes" | sort -u); do
 done
 
 printf '%s\n' "$inventory_body" | atomic_write "$INVENTORY" 0600
-cat "$known_hosts_temp" | atomic_write "$known_hosts_target" 0600
+atomic_write "$known_hosts_target" 0600 <"$known_hosts_temp"
 
 log "Generated inventory: $INVENTORY"
 log "Generated pinned SSH host keys: $known_hosts_target"
