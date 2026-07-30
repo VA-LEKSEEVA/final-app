@@ -93,9 +93,23 @@ dump_cluster_diagnostics() {
           | "\($ns):\(.metadata.labels["app.kubernetes.io/name"] // (.metadata.ownerReferences[0].name // "pod"))=\(if $reasons == "" then .status.phase else $reasons end)")
       ] | unique | join("; ")
     ' 2>/dev/null || true)"
+  local unhealthy_resources
+  unhealthy_resources="$(kubectl_cmd -n argocd get applications.argoproj.io -o json 2>/dev/null |
+    jq -r '
+      [.items[]?
+        | .metadata.name as $app
+        | .status.resources[]?
+        | select(
+            (.health.status // "Healthy") != "Healthy" or
+            (.status // "Synced") != "Synced"
+          )
+        | "\($app):\(.kind)/\(.name)=\(.status // "?")/\(.health.status // "?")"
+      ] | unique | join("; ")
+    ' 2>/dev/null || true)"
   if [[ -n "$stuck" ]]; then
-    printf '::error title=Argo CD not converged::Stuck apps: %s. Pod reasons: %s\n' \
-      "$stuck" "${pod_reasons:-none}" | redact_sensitive >&2
+    printf '::error title=Argo CD not converged::Stuck apps: %s. Pod reasons: %s. Resources: %s\n' \
+      "$stuck" "${pod_reasons:-none}" "${unhealthy_resources:-none}" |
+      redact_sensitive >&2
   fi
 }
 trap dump_cluster_diagnostics EXIT
