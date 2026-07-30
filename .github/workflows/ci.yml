@@ -22,6 +22,8 @@ env:
   TERRAFORM_LINUX_AMD64_SHA256: d25ce7b6902013ad905db3d2eab0be4cd905887fe88b81a6171b8d5503c31f3d
   ANSIBLE_CORE_VERSION: 2.21.2
   YC_CLI_VERSION: 1.21.0
+  KUBECTL_VERSION: v1.31.5
+  KUBECTL_LINUX_AMD64_SHA256: fbecbfd375b3686002c2e81d51c390172f5ffba3d6b47920d55342cb03f557af
   YQ_VERSION: v4.44.3
   YQ_LINUX_AMD64_SHA256: a2c097180dd884a8d50c956ee16a9cec070f30a7947cf4ebf87d5f36213e9ed7
   IMAGE_NAME: guestbook
@@ -447,6 +449,14 @@ jobs:
           CLI_VERSION="$YC_CLI_VERSION" \
             bash "$RUNNER_TEMP/install-yc.sh" -n -i "$RUNNER_TEMP/yandex-cloud"
           echo "$RUNNER_TEMP/yandex-cloud/bin" >> "$GITHUB_PATH"
+          curl --fail --show-error --silent --location \
+            --retry 5 --retry-all-errors \
+            "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl" \
+            --output "$RUNNER_TEMP/kubectl"
+          echo "${KUBECTL_LINUX_AMD64_SHA256}  $RUNNER_TEMP/kubectl" |
+            sha256sum --check --strict
+          chmod +x "$RUNNER_TEMP/kubectl"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
       - name: Authenticate to Yandex Cloud
         env:
@@ -796,10 +806,32 @@ jobs:
       - name: Wait for Kubernetes API access
         run: |
           set -euo pipefail
+          command -v kubectl >/dev/null || {
+            echo "::error title=kubectl unavailable::kubectl was not installed on the deployment runner"
+            exit 1
+          }
+          [[ -s "$KUBECONFIG" ]] || {
+            echo "::error title=Missing kubeconfig::Ansible did not export a non-empty kubeconfig"
+            exit 1
+          }
+          kubectl config current-context >/dev/null || {
+            echo "::error title=Invalid kubeconfig::The exported kubeconfig has no usable current context"
+            exit 1
+          }
           deadline=$((SECONDS + 300))
-          until kubectl version --request-timeout=5s >/dev/null 2>&1; do
+          kubectl_error="$RUNNER_TEMP/kubectl-readiness.err"
+          until kubectl version --request-timeout=5s \
+            >/dev/null 2>"$kubectl_error"; do
             if ((SECONDS >= deadline)); then
-              echo "::error title=Kubernetes API unavailable::The exported kubeconfig did not become usable"
+              error_message="$(
+                tail -n 5 "$kubectl_error" |
+                  sed -E \
+                    -e 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip-address>/g' \
+                    -e 's/\\b(b1g|e9b|enp|fh8|dns|crp)[a-z0-9]{10,}\\b/<resource-id>/g' |
+                  tr '\n' ' ' |
+                  cut -c1-2000
+              )"
+              echo "::error title=Kubernetes API unavailable::$error_message"
               exit 1
             fi
             sleep 5
