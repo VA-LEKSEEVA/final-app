@@ -1,0 +1,62 @@
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "guestbook.fullname" . }}-backup
+  labels:
+    {{- include "guestbook.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+          - name: backup
+            image: postgres:16-alpine
+            command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              apk add --no-cache aws-cli
+              TS=$(date +%Y%m%d%H%M%S)
+              FILE=/tmp/backup-${TS}.sql.gz
+              echo "Dumping..."
+              PGPASSWORD=$DB_PASSWORD pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME | gzip > $FILE
+              ls -lh $FILE
+              echo "Uploading to s3://${S3_BUCKET}/backups/$(basename $FILE)..."
+              aws --endpoint-url=https://storage.yandexcloud.net \
+                s3 cp $FILE s3://${S3_BUCKET}/backups/$(basename $FILE)
+              echo "Done"
+            env:
+            - name: DB_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DB_USER
+              value: {{ .Values.postgresql.auth.username }}
+            - name: DB_NAME
+              value: {{ .Values.postgresql.auth.database }}
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Release.Name }}-postgresql
+                  key: password
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: backup-s3-creds
+                  key: AWS_ACCESS_KEY_ID
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: backup-s3-creds
+                  key: AWS_SECRET_ACCESS_KEY
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: backup-s3-creds
+                  key: S3_BUCKET
+{{- end }}

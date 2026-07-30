@@ -1,0 +1,56 @@
+replicaCount: 2
+image:
+  repository: cr.yandex/crp38qtcgb3m048rbf4u/guestbook
+  tag: latest
+  pullPolicy: IfNotPresent
+service:
+  type: ClusterIP
+  port: 80
+containerPort: 8080
+ingress:
+  enabled: true
+  className: nginx
+  host: guestbook.vika-cloud.ru
+  tls:
+    enabled: true
+    issuer: letsencrypt-prod
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+postgresql:
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: 16.4.0-debian-12-r14
+    pullPolicy: IfNotPresent
+  auth:
+    username: guestbook
+    password: guestbook
+    database: guestbook
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+monitoring:
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+  prometheusRule:
+    enabled: true
+  dashboard:
+    enabled: true
+hpa:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPU: 70
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+backup:
+  enabled: true
+  schedule: "0 3 * * *"

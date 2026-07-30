@@ -1,0 +1,17 @@
+{{- if .Values.monitoring.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "guestbook.fullname" . }}-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  guestbook.json: |
+    {
+      "title": "Guestbook Dashboard",
+      "panels": [],
+      "schemaVersion": 36,
+      "version": 0
+    }
+{{- end }}

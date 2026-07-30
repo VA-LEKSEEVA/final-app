@@ -1,0 +1,43 @@
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "guestbook.fullname" . }}
+  labels:
+    release: kps
+spec:
+  groups:
+    - name: guestbook.rules
+      interval: 30s
+      rules:
+        - alert: GuestbookHighErrorRate
+          expr: |
+            ( sum(rate(http_requests_total{job=".guestbook.", status="5.."}[5m])) / sum(rate(http_requests_total{job=".guestbook."}[5m])) ) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High error rate on guestbook"
+        - alert: GuestbookHighLatency
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=".guestbook."}[5m])) ) > 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "p95 latency > 1s on guestbook"
+        - alert: GuestbookDown
+          expr: up{job=".guestbook."} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Guestbook is down"
+        - alert: GuestbookDBDown
+          expr: up{job=".postgresql."} == 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Guestbook database is down"
+{{- end }}
