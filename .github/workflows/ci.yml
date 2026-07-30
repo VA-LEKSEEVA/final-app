@@ -380,6 +380,9 @@ jobs:
     needs: update-gitops
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
     concurrency:
       group: production-infrastructure
       cancel-in-progress: false
@@ -456,6 +459,13 @@ jobs:
             echo "YC_SERVICE_ACCOUNT_KEY_FILE=$YC_SERVICE_ACCOUNT_KEY_FILE"
             echo "TF_VARS_FILE=$RUNNER_TEMP/production.tfvars"
           } >> "$GITHUB_ENV"
+          state_passphrase="$(
+            printf '%s' "$YC_SA_KEY" |
+              sha256sum |
+              awk '{print $1}'
+          )"
+          echo "::add-mask::$state_passphrase"
+          echo "TF_STATE_PASSPHRASE=$state_passphrase" >> "$GITHUB_ENV"
 
       - name: Issue temporary Object Storage backend credentials
         run: |
@@ -476,16 +486,47 @@ jobs:
             echo "AWS_SESSION_TOKEN=$session_token"
           } >> "$GITHUB_ENV"
 
-      - name: Ensure Terraform state bucket
+      - name: Restore encrypted Terraform state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          state_bucket="final-v2-tfstate-${YC_FOLDER_ID}"
-          if ! yc storage bucket get "$state_bucket" >/dev/null 2>&1; then
-            yc storage bucket create \
-              --name "$state_bucket" \
-              --max-size 1073741824
+          state_file="$GITHUB_WORKSPACE/final-infra/terraform/envs/prod/terraform.tfstate"
+          artifacts_json="$(
+            curl --fail --show-error --silent --location \
+              --retry 5 --retry-all-errors \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100"
+          )"
+          archive_url="$(
+            jq -r '
+              [
+                .artifacts[] |
+                select(.expired == false) |
+                select(.name | startswith("production-terraform-state-"))
+              ] |
+              sort_by(.created_at) |
+              last.archive_download_url // empty
+            ' <<<"$artifacts_json"
+          )"
+          if [[ -n "$archive_url" ]]; then
+            curl --fail --show-error --silent --location \
+              --retry 5 --retry-all-errors \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$archive_url" \
+              --output "$RUNNER_TEMP/terraform-state.zip"
+            unzip -q "$RUNNER_TEMP/terraform-state.zip" \
+              -d "$RUNNER_TEMP/terraform-state"
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+              -in "$RUNNER_TEMP/terraform-state/terraform.tfstate.enc" \
+              -out "$state_file" \
+              -pass env:TF_STATE_PASSPHRASE
           fi
-          echo "TF_STATE_BUCKET=$state_bucket" >> "$GITHUB_ENV"
+          echo "TF_STATE_FILE=$state_file" >> "$GITHUB_ENV"
 
       - name: Prepare Terraform variables
         run: |
@@ -507,6 +548,7 @@ jobs:
           EOF
 
       - name: Apply Terraform infrastructure
+        id: terraform
         run: |
           set -euo pipefail
           terraform_log="$RUNNER_TEMP/terraform-apply.log"
@@ -514,7 +556,6 @@ jobs:
           {
             terraform -chdir=final-infra/terraform/envs/prod init \
               -reconfigure \
-              -backend-config="bucket=$TF_STATE_BUCKET" \
               -input=false &&
             terraform -chdir=final-infra/terraform/envs/prod apply \
               -auto-approve \
@@ -524,6 +565,7 @@ jobs:
           } 2>&1 | tee "$terraform_log"
           terraform_status="${PIPESTATUS[0]}"
           set -e
+          echo "status=$terraform_status" >> "$GITHUB_OUTPUT"
           if ((terraform_status != 0)); then
             error_message="$(
               tail -n 25 "$terraform_log" |
@@ -532,8 +574,37 @@ jobs:
                 cut -c1-4000
             )"
             echo "::error title=Terraform deployment failed::$error_message"
-            exit "$terraform_status"
           fi
+
+      - name: Encrypt Terraform state
+        id: state
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -s "$TF_STATE_FILE" ]]; then
+            openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+              -in "$TF_STATE_FILE" \
+              -out "$RUNNER_TEMP/terraform.tfstate.enc" \
+              -pass env:TF_STATE_PASSPHRASE
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload encrypted Terraform state
+        if: always() && steps.state.outputs.present == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: production-terraform-state-${{ github.run_id }}
+          path: ${{ runner.temp }}/terraform.tfstate.enc
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Stop after failed Terraform apply
+        if: steps.terraform.outputs.status != '0'
+        env:
+          TERRAFORM_STATUS: ${{ steps.terraform.outputs.status }}
+        run: exit "$TERRAFORM_STATUS"
 
       - name: Resolve a production hostname
         id: hostname
