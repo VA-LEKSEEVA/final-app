@@ -762,20 +762,32 @@ jobs:
             TF_VARS_FILE="$TF_VARS_FILE" \
             APP_HOST="$APP_HOST"
 
-      - name: Bootstrap k3s and Argo CD
+      - name: Generate Ansible inventory
+        run: |
+          set -euo pipefail
+          make -C final-infra inventory \
+            TF_VARS_FILE="$TF_VARS_FILE"
+
+      - name: Install k3s and bootstrap Argo CD
+        run: |
+          set -euo pipefail
+          make -C final-infra ansible \
+            GITOPS_URL="$GITOPS_URL" \
+            APP_HOST="$APP_HOST"
+
+      - name: Apply Kubernetes runtime secrets
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
-          make -C final-infra inventory \
-            TF_VARS_FILE="$TF_VARS_FILE"
-          make -C final-infra ansible \
-            GITOPS_URL="$GITOPS_URL" \
-            APP_HOST="$APP_HOST"
           make -C final-infra apply-runtime-secrets
           make -C final-infra apply-backup-secret \
             TF_VARS_FILE="$TF_VARS_FILE"
+
+      - name: Wait for Argo CD and verify production
+        run: |
+          set -euo pipefail
           make -C final-infra wait
           make -C final-infra verify \
             APP_HOST="$APP_HOST" \
