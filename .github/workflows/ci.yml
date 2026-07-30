@@ -542,39 +542,56 @@ jobs:
             fi
           done < <(jq -r '.[].id // empty' <<<"$folders_json")
 
-          existing_instance=""
           existing_folder_id=""
+          existing_subnet_id=""
+          existing_security_group_ids="[]"
           while IFS= read -r folder_id; do
             [[ -n "$folder_id" ]] || continue
-            if instance_json="$(yc compute instance get k3s-master \
+            subnets_json="$(yc vpc subnet list \
               --folder-id "$folder_id" \
-              --format json 2>/dev/null)"; then
-              existing_instance="$instance_json"
-              existing_folder_id="$folder_id"
-              break
-            fi
+              --format json 2>/dev/null || printf '[]')"
+            subnet_json="$(
+              jq -c '
+                [
+                  .[] |
+                  select(
+                    (.zone_id // .zoneId // "") == "ru-central1-a"
+                  )
+                ] |
+                first // empty
+              ' <<<"$subnets_json"
+            )"
+            [[ -n "$subnet_json" ]] || continue
+
+            existing_subnet_id="$(
+              jq -er '.id' <<<"$subnet_json"
+            )"
+            existing_network_id="$(
+              jq -er '.network_id // .networkId' <<<"$subnet_json"
+            )"
+            security_groups_json="$(yc vpc security-group list \
+              --folder-id "$folder_id" \
+              --format json 2>/dev/null || printf '[]')"
+            existing_security_group_ids="$(
+              jq -c --arg network_id "$existing_network_id" '
+                [
+                  .[] |
+                  select(
+                    (.network_id // .networkId // "") == $network_id
+                  ) |
+                  .id
+                ][0:1]
+              ' <<<"$security_groups_json"
+            )"
+            existing_folder_id="$folder_id"
+            break
           done <<<"$candidate_folders"
 
-          if [[ -z "$existing_instance" ]]; then
-            echo "::error title=Existing network discovery failed::The reference k3s-master instance was not found in the folders available to the deployment service account"
+          if [[ -z "$existing_subnet_id" || -z "$existing_folder_id" ]]; then
+            echo "::error title=Existing network discovery failed::No accessible subnet was found in ru-central1-a"
             exit 1
           fi
-
-          existing_subnet_id="$(
-            jq -er '
-              .network_interfaces[0].subnet_id //
-              .networkInterfaces[0].subnetId
-            ' <<<"$existing_instance"
-          )"
-          existing_security_group_ids="$(
-            jq -cer '
-              .network_interfaces[0].security_group_ids //
-              .networkInterfaces[0].securityGroupIds //
-              []
-            ' \
-              <<<"$existing_instance"
-          )"
-          echo "Using the existing k3s-master network"
+          echo "Using an existing accessible subnet"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$existing_folder_id"
