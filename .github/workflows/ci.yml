@@ -543,44 +543,75 @@ jobs:
       - name: Prepare Terraform variables
         run: |
           set -euo pipefail
-          legacy_state="$RUNNER_TEMP/legacy-production.tfstate"
-          yc storage s3api get-object \
-            --bucket vika-tfstate-20260705-3260 \
-            --key final/terraform.tfstate \
-            "$legacy_state" >/dev/null
-          existing_subnet_id="$(
-            jq -er '
-              [
-                .resources[] |
-                select(.type == "yandex_vpc_subnet") |
-                .instances[]?.attributes.id
-              ] |
-              first
-            ' "$legacy_state"
-          )"
-          existing_security_group_ids="$(
-            jq -cer '
-              [
-                .resources[] |
-                select(.type == "yandex_vpc_security_group") |
-                .instances[]?.attributes.id
-              ][0:1]
-            ' "$legacy_state"
-          )"
-          existing_folder_id="$(
-            jq -r '
-              [
-                .resources[] |
-                select(.type == "yandex_compute_instance") |
-                .instances[]?.attributes.folder_id //
+          existing_folder_id="$YC_FOLDER_ID"
+          existing_subnet_id=""
+          existing_network_id=""
+          existing_security_group_ids="[]"
+
+          if instance_json="$(yc compute instance get k3s-master \
+            --folder-id "$existing_folder_id" \
+            --format json 2>/dev/null)"; then
+            candidate_subnet_id="$(
+              jq -r '
+                .network_interfaces[0].subnet_id //
+                .networkInterfaces[0].subnetId //
                 empty
-              ] |
-              first // empty
-            ' "$legacy_state"
+              ' <<<"$instance_json"
+            )"
+            if [[ -n "$candidate_subnet_id" ]] &&
+              subnet_json="$(yc vpc subnet get "$candidate_subnet_id" \
+                --folder-id "$existing_folder_id" \
+                --format json 2>/dev/null)"; then
+              existing_subnet_id="$candidate_subnet_id"
+              existing_network_id="$(
+                jq -er '.network_id // .networkId' <<<"$subnet_json"
+              )"
+            fi
+          fi
+
+          if [[ -z "$existing_subnet_id" ]]; then
+            subnets_json="$(yc vpc subnet list \
+              --folder-id "$existing_folder_id" \
+              --format json)"
+            matching_subnets="$(
+              jq -c '
+                [
+                  .[] |
+                  select(
+                    (.zone_id // .zoneId // "") == "ru-central1-a"
+                  )
+                ]
+              ' <<<"$subnets_json"
+            )"
+            subnet_count="$(jq 'length' <<<"$matching_subnets")"
+            if ((subnet_count != 1)); then
+              echo "::error title=Existing network discovery failed::Expected exactly one accessible subnet in the configured production folder and zone"
+              exit 1
+            fi
+            existing_subnet_id="$(
+              jq -er '.[0].id' <<<"$matching_subnets"
+            )"
+            existing_network_id="$(
+              jq -er '.[0].network_id // .[0].networkId' \
+                <<<"$matching_subnets"
+            )"
+          fi
+
+          security_groups_json="$(yc vpc security-group list \
+            --folder-id "$existing_folder_id" \
+            --format json 2>/dev/null || printf '[]')"
+          existing_security_group_ids="$(
+            jq -c --arg network_id "$existing_network_id" '
+              [
+                .[] |
+                select(
+                  (.network_id // .networkId // "") == $network_id
+                ) |
+                .id
+              ][0:1]
+            ' <<<"$security_groups_json"
           )"
-          [[ -n "$existing_folder_id" ]] ||
-            existing_folder_id="$YC_FOLDER_ID"
-          echo "Using the existing guestbook network state"
+          echo "Using the production folder network"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$existing_folder_id"
