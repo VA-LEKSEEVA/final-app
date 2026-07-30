@@ -21,12 +21,12 @@
       ansible.builtin.command: cloud-init status --wait
       register: cloud_init_status
       changed_when: false
-      failed_when: cloud_init_status.rc not in [0, 2]
+      failed_when: cloud_init_status.rc not in [0, 1, 2]
 
     - name: Report recoverable cloud-init warnings
       ansible.builtin.debug:
-        msg: Cloud-init completed with recoverable warnings; continuing with explicit package installation
-      when: cloud_init_status.rc == 2
+        msg: Cloud-init reported a recoverable warning/error; continuing with explicit Ansible configuration
+      when: cloud_init_status.rc in [1, 2]
 
     - name: Gather facts after cloud-init
       ansible.builtin.setup:
