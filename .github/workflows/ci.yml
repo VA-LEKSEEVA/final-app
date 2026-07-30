@@ -531,17 +531,65 @@ jobs:
       - name: Prepare Terraform variables
         run: |
           set -euo pipefail
-          existing_instance="$(yc compute instance get k3s-master --format json)"
+          candidate_folders="$YC_FOLDER_ID"
+          folders_json="$(yc resource-manager folder list \
+            --cloud-id "$YC_CLOUD_ID" \
+            --format json 2>/dev/null || printf '[]')"
+          while IFS= read -r folder_id; do
+            [[ -n "$folder_id" ]] || continue
+            if ! printf '%s\n' "$candidate_folders" | grep -Fxq "$folder_id"; then
+              candidate_folders="${candidate_folders}"$'\n'"${folder_id}"
+            fi
+          done < <(jq -r '.[].id // empty' <<<"$folders_json")
+
+          existing_instance=""
+          existing_folder_id=""
+          while IFS= read -r folder_id; do
+            [[ -n "$folder_id" ]] || continue
+            if instance_json="$(yc compute instance get k3s-master \
+              --folder-id "$folder_id" \
+              --format json 2>/dev/null)"; then
+              existing_instance="$instance_json"
+              existing_folder_id="$folder_id"
+              break
+            fi
+          done <<<"$candidate_folders"
+
+          if [[ -z "$existing_instance" ]]; then
+            available_instances="$(
+              while IFS= read -r folder_id; do
+                [[ -n "$folder_id" ]] || continue
+                yc compute instance list \
+                  --folder-id "$folder_id" \
+                  --format json 2>/dev/null |
+                  jq -r --arg folder "$folder_id" \
+                    '.[]? | "\($folder):\(.name // .id)"'
+              done <<<"$candidate_folders" |
+                sort -u |
+                paste -sd, -
+            )"
+            echo "::error title=Existing network discovery failed::k3s-master was not found. Accessible instances: ${available_instances:-none}"
+            exit 1
+          fi
+
           existing_subnet_id="$(
-            jq -er '.network_interfaces[0].subnet_id' <<<"$existing_instance"
+            jq -er '
+              .network_interfaces[0].subnet_id //
+              .networkInterfaces[0].subnetId
+            ' <<<"$existing_instance"
           )"
           existing_security_group_ids="$(
-            jq -cer '.network_interfaces[0].security_group_ids // []' \
+            jq -cer '
+              .network_interfaces[0].security_group_ids //
+              .networkInterfaces[0].securityGroupIds //
+              []
+            ' \
               <<<"$existing_instance"
           )"
+          echo "Using existing network from folder $existing_folder_id"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
-          folder_id           = "$YC_FOLDER_ID"
+          folder_id           = "$existing_folder_id"
           app_host            = "$APP_HOST"
           manage_dns_record   = false
           manage_backup_resources = false
