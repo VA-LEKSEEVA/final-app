@@ -771,9 +771,27 @@ jobs:
       - name: Install k3s and bootstrap Argo CD
         run: |
           set -euo pipefail
-          make -C final-infra ansible \
+          ansible_log="$RUNNER_TEMP/ansible-bootstrap.log"
+          set +e
+          ANSIBLE_NOCOLOR=1 make -C final-infra ansible \
             GITOPS_URL="$GITOPS_URL" \
-            APP_HOST="$APP_HOST"
+            APP_HOST="$APP_HOST" \
+            >"$ansible_log" 2>&1
+          ansible_status="$?"
+          set -e
+          if ((ansible_status != 0)); then
+            error_message="$(
+              tail -n 40 "$ansible_log" |
+                sed -E \
+                  -e 's/[0-9]{1,3}(\.[0-9]{1,3}){3}/<ip-address>/g' \
+                  -e 's/\\b(b1g|e9b|enp|fh8|dns|crp)[a-z0-9]{10,}\\b/<resource-id>/g' \
+                  -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<request-id>/g' |
+                tr '\n' ' ' |
+                cut -c1-4000
+            )"
+            echo "::error title=Ansible bootstrap failed::$error_message"
+            exit "$ansible_status"
+          fi
 
       - name: Apply Kubernetes runtime secrets
         env:

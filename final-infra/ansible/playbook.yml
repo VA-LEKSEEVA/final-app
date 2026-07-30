@@ -2,7 +2,7 @@
 - name: Prepare all k3s nodes
   hosts: k3s_cluster
   become: true
-  gather_facts: true
+  gather_facts: false
   any_errors_fatal: true
   tasks:
     - name: Validate required bootstrap variables
@@ -28,6 +28,9 @@
         msg: Cloud-init completed with recoverable warnings; continuing with explicit package installation
       when: cloud_init_status.rc == 2
 
+    - name: Gather facts after cloud-init
+      ansible.builtin.setup:
+
     - name: Install base packages
       ansible.builtin.apt:
         name:
@@ -37,6 +40,10 @@
         state: present
         update_cache: true
         cache_valid_time: 3600
+      register: base_packages
+      retries: 5
+      delay: 10
+      until: base_packages is succeeded
 
     - name: Create k3s configuration directory
       ansible.builtin.file:
