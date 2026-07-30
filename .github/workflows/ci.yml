@@ -476,6 +476,17 @@ jobs:
             echo "AWS_SESSION_TOKEN=$session_token"
           } >> "$GITHUB_ENV"
 
+      - name: Ensure Terraform state bucket
+        run: |
+          set -euo pipefail
+          state_bucket="final-v2-tfstate-${YC_FOLDER_ID}"
+          if ! yc storage bucket get "$state_bucket" >/dev/null 2>&1; then
+            yc storage bucket create \
+              --name "$state_bucket" \
+              --max-size 1073741824
+          fi
+          echo "TF_STATE_BUCKET=$state_bucket" >> "$GITHUB_ENV"
+
       - name: Prepare Terraform variables
         run: |
           set -euo pipefail
@@ -485,6 +496,11 @@ jobs:
           app_host            = "$APP_HOST"
           manage_dns_record   = false
           manage_backup_resources = false
+          use_existing_network = true
+          existing_subnet_name = "guestbook-subnet"
+          existing_security_group_name = "guestbook-sg"
+          manage_load_balancer = false
+          subnet_cidr          = "10.10.0.0/24"
           cluster_name        = "final-k3s-v2"
           ssh_user            = "ubuntu"
           ssh_private_key_path = "$RUNNER_TEMP/final-k3s-key"
@@ -498,6 +514,7 @@ jobs:
           {
             terraform -chdir=final-infra/terraform/envs/prod init \
               -reconfigure \
+              -backend-config="bucket=$TF_STATE_BUCKET" \
               -input=false &&
             terraform -chdir=final-infra/terraform/envs/prod apply \
               -auto-approve \

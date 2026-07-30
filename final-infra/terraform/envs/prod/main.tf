@@ -34,6 +34,13 @@ locals {
   ssh_public_key = var.ssh_public_key_path != null && var.ssh_public_key_path != "" ? trimspace(
     file(pathexpand(var.ssh_public_key_path))
   ) : trimspace(tls_private_key.cluster.public_key_openssh)
+  subnet_id         = var.use_existing_network ? data.yandex_vpc_subnet.existing[0].id : yandex_vpc_subnet.cluster[0].id
+  security_group_id = var.use_existing_network ? data.yandex_vpc_security_group.existing[0].id : yandex_vpc_security_group.cluster[0].id
+  app_public_ip = var.manage_load_balancer ? one([
+    for listener in yandex_lb_network_load_balancer.ingress[0].listener :
+    one(listener.external_address_spec).address
+    if listener.name == "http"
+  ]) : yandex_compute_instance.node["server-1"].network_interface[0].nat_ip_address
 }
 
 resource "random_id" "bucket_suffix" {
@@ -45,24 +52,30 @@ resource "tls_private_key" "cluster" {
 }
 
 resource "yandex_vpc_network" "cluster" {
+  count = var.use_existing_network ? 0 : 1
+
   name      = var.network_name
   folder_id = local.effective_folder_id
   labels    = local.common_labels
 }
 
 resource "yandex_vpc_subnet" "cluster" {
+  count = var.use_existing_network ? 0 : 1
+
   name           = "${var.network_name}-${var.zone}"
   folder_id      = local.effective_folder_id
   zone           = var.zone
-  network_id     = yandex_vpc_network.cluster.id
+  network_id     = yandex_vpc_network.cluster[0].id
   v4_cidr_blocks = [var.subnet_cidr]
   labels         = local.common_labels
 }
 
 resource "yandex_vpc_security_group" "cluster" {
+  count = var.use_existing_network ? 0 : 1
+
   name       = "${var.cluster_name}-sg"
   folder_id  = local.effective_folder_id
-  network_id = yandex_vpc_network.cluster.id
+  network_id = yandex_vpc_network.cluster[0].id
   labels     = local.common_labels
 
   ingress {
@@ -116,6 +129,20 @@ resource "yandex_vpc_security_group" "cluster" {
   }
 }
 
+data "yandex_vpc_subnet" "existing" {
+  count = var.use_existing_network ? 1 : 0
+
+  name      = var.existing_subnet_name
+  folder_id = local.effective_folder_id
+}
+
+data "yandex_vpc_security_group" "existing" {
+  count = var.use_existing_network ? 1 : 0
+
+  name      = var.existing_security_group_name
+  folder_id = local.effective_folder_id
+}
+
 data "yandex_compute_image" "ubuntu" {
   family = var.ubuntu_image_family
 }
@@ -147,10 +174,10 @@ resource "yandex_compute_instance" "node" {
   }
 
   network_interface {
-    subnet_id          = yandex_vpc_subnet.cluster.id
+    subnet_id          = local.subnet_id
     nat                = true
-    ip_address         = each.value.local_ip
-    security_group_ids = [yandex_vpc_security_group.cluster.id]
+    ip_address         = var.use_existing_network ? null : each.value.local_ip
+    security_group_ids = [local.security_group_id]
   }
 
   metadata = {
@@ -165,19 +192,23 @@ resource "yandex_compute_instance" "node" {
 }
 
 resource "yandex_lb_target_group" "ingress" {
+  count = var.manage_load_balancer ? 1 : 0
+
   name      = "${var.cluster_name}-ingress"
   folder_id = local.effective_folder_id
 
   dynamic "target" {
-    for_each = local.nodes
+    for_each = yandex_compute_instance.node
     content {
-      subnet_id = yandex_vpc_subnet.cluster.id
-      address   = target.value.local_ip
+      subnet_id = local.subnet_id
+      address   = target.value.network_interface[0].ip_address
     }
   }
 }
 
 resource "yandex_lb_network_load_balancer" "ingress" {
+  count = var.manage_load_balancer ? 1 : 0
+
   name      = "${var.cluster_name}-ingress"
   folder_id = local.effective_folder_id
   type      = "external"
@@ -205,7 +236,7 @@ resource "yandex_lb_network_load_balancer" "ingress" {
   }
 
   attached_target_group {
-    target_group_id = yandex_lb_target_group.ingress.id
+    target_group_id = yandex_lb_target_group.ingress[0].id
 
     healthcheck {
       name                = "http"
@@ -292,9 +323,5 @@ resource "yandex_dns_recordset" "app" {
   name    = "${trimsuffix(var.app_host, ".")}."
   type    = "A"
   ttl     = 60
-  data = [one([
-    for listener in yandex_lb_network_load_balancer.ingress.listener :
-    one(listener.external_address_spec).address
-    if listener.name == "http"
-  ])]
+  data    = [local.app_public_ip]
 }

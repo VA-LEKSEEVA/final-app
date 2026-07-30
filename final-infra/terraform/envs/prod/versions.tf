@@ -5,7 +5,6 @@ terraform {
     endpoints = {
       s3 = "https://storage.yandexcloud.net"
     }
-    bucket                      = "vika-tfstate-20260705-3260"
     region                      = "ru-central1"
     key                         = "final-v2/terraform.tfstate"
     skip_region_validation      = true

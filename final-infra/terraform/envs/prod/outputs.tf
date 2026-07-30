@@ -16,12 +16,8 @@ output "server_public_ip" {
 }
 
 output "app_public_ip" {
-  description = "Network Load Balancer IP used by the application DNS A record."
-  value = one([
-    for listener in yandex_lb_network_load_balancer.ingress.listener :
-    one(listener.external_address_spec).address
-    if listener.name == "http"
-  ])
+  description = "Public IP used by the application hostname (load balancer or server fallback)."
+  value       = local.app_public_ip
 }
 
 output "ssh_user" {

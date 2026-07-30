@@ -71,6 +71,30 @@ variable "network_name" {
   default     = "final-k3s"
 }
 
+variable "use_existing_network" {
+  description = "Reuse an existing VPC subnet and security group instead of creating them."
+  type        = bool
+  default     = false
+}
+
+variable "existing_subnet_name" {
+  description = "Existing subnet name used when use_existing_network is true."
+  type        = string
+  default     = "guestbook-subnet"
+}
+
+variable "existing_security_group_name" {
+  description = "Existing security group name used when use_existing_network is true."
+  type        = string
+  default     = "guestbook-sg"
+}
+
+variable "manage_load_balancer" {
+  description = "Create a Network Load Balancer. If false, the server public IP is used for ingress."
+  type        = bool
+  default     = true
+}
+
 variable "subnet_cidr" {
   description = "IPv4 CIDR for the cluster subnet."
   type        = string
