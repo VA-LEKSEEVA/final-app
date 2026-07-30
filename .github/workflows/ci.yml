@@ -556,19 +556,7 @@ jobs:
           done <<<"$candidate_folders"
 
           if [[ -z "$existing_instance" ]]; then
-            available_instances="$(
-              while IFS= read -r folder_id; do
-                [[ -n "$folder_id" ]] || continue
-                yc compute instance list \
-                  --folder-id "$folder_id" \
-                  --format json 2>/dev/null |
-                  jq -r --arg folder "$folder_id" \
-                    '.[]? | "\($folder):\(.name // .id)"'
-              done <<<"$candidate_folders" |
-                sort -u |
-                paste -sd, -
-            )"
-            echo "::error title=Existing network discovery failed::k3s-master was not found. Accessible instances: ${available_instances:-none}"
+            echo "::error title=Existing network discovery failed::The reference k3s-master instance was not found in the folders available to the deployment service account"
             exit 1
           fi
 
@@ -586,7 +574,7 @@ jobs:
             ' \
               <<<"$existing_instance"
           )"
-          echo "Using existing network from folder $existing_folder_id"
+          echo "Using the existing k3s-master network"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$existing_folder_id"
