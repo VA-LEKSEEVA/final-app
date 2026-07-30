@@ -803,6 +803,34 @@ jobs:
             exit "$ansible_status"
           fi
 
+      - name: Normalize exported kubeconfig endpoint
+        run: |
+          set -euo pipefail
+          [[ -s "$KUBECONFIG" ]] || {
+            echo "::error title=Missing kubeconfig::Ansible did not export a non-empty kubeconfig"
+            exit 1
+          }
+          api_ip="$(terraform \
+            -chdir=final-infra/terraform/envs/prod \
+            output -raw app_public_ip)"
+          API_SERVER="https://${api_ip}:6443" \
+            KUBECONFIG_PATH="$KUBECONFIG" \
+            "$RUNNER_TEMP/infra-venv/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          import yaml
+
+          path = Path(os.environ["KUBECONFIG_PATH"])
+          config = yaml.safe_load(path.read_text())
+          clusters = config.get("clusters") or []
+          if not clusters:
+              raise SystemExit("kubeconfig does not contain clusters")
+          for cluster in clusters:
+              cluster.setdefault("cluster", {})["server"] = os.environ["API_SERVER"]
+          path.write_text(yaml.safe_dump(config, sort_keys=False))
+          path.chmod(0o600)
+          PY
+
       - name: Wait for Kubernetes API access
         run: |
           set -euo pipefail
