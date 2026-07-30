@@ -173,6 +173,28 @@ jobs:
           helm template guestbook-prod deploy/guestbook \
             >/dev/null
 
+      - name: Validate pinned platform Helm charts
+        run: |
+          set -euo pipefail
+          helm lint platform-charts/ingress-nginx
+          helm template ingress-nginx \
+            platform-charts/ingress-nginx \
+            --namespace ingress-nginx \
+            --set controller.kind=DaemonSet \
+            --set controller.service.type=NodePort \
+            --set controller.service.nodePorts.http=30080 \
+            --set controller.service.nodePorts.https=30443 \
+            --set controller.hostPort.enabled=true \
+            >/dev/null
+
+          helm lint platform-charts/kube-prometheus-stack
+          helm template kps \
+            platform-charts/kube-prometheus-stack \
+            --namespace monitoring \
+            --set grafana.enabled=true \
+            --set prometheus.prometheusSpec.retention=1d \
+            >/dev/null
+
   build-image:
     name: Build image
     runs-on: ubuntu-24.04
@@ -360,6 +382,25 @@ jobs:
               .spec.sources[0].path = "deploy/guestbook" |
               del(.spec.sources[0].chart)
             ' bootstrap/apps/05-guestbook-prod.yaml
+          APP_REPOSITORY="https://github.com/${GITHUB_REPOSITORY}.git" \
+            yq eval -i '
+              .spec.source.repoURL = strenv(APP_REPOSITORY) |
+              .spec.source.path = "platform-charts/ingress-nginx" |
+              del(.spec.source.chart) |
+              .spec.source.targetRevision = "main"
+            ' bootstrap/apps/02-ingress-nginx.yaml
+          APP_REPOSITORY="https://github.com/${GITHUB_REPOSITORY}.git" \
+            yq eval -i '
+              .spec.source.repoURL = strenv(APP_REPOSITORY) |
+              .spec.source.path = "platform-charts/kube-prometheus-stack" |
+              del(.spec.source.chart) |
+              .spec.source.targetRevision = "main" |
+              .spec.syncPolicy.syncOptions = (
+                (.spec.syncPolicy.syncOptions // []) +
+                ["CreateNamespace=true", "ServerSideApply=true"]
+                | unique
+              )
+            ' bootstrap/apps/03-monitoring.yaml
           cat > manifests/cluster-issuer.yaml <<'EOF'
           apiVersion: cert-manager.io/v1
           kind: ClusterIssuer
