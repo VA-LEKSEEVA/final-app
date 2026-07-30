@@ -793,13 +793,29 @@ jobs:
             exit "$ansible_status"
           fi
 
-      - name: Apply Kubernetes runtime secrets
+      - name: Wait for Kubernetes API access
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          until kubectl version --request-timeout=5s >/dev/null 2>&1; do
+            if ((SECONDS >= deadline)); then
+              echo "::error title=Kubernetes API unavailable::The exported kubeconfig did not become usable"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Apply application runtime Secret
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
           make -C final-infra apply-runtime-secrets
+
+      - name: Apply backup Secret
+        run: |
+          set -euo pipefail
           make -C final-infra apply-backup-secret \
             TF_VARS_FILE="$TF_VARS_FILE"
 
