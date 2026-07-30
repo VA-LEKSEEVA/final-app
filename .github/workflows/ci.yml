@@ -531,6 +531,14 @@ jobs:
       - name: Prepare Terraform variables
         run: |
           set -euo pipefail
+          existing_instance="$(yc compute instance get k3s-master --format json)"
+          existing_subnet_id="$(
+            jq -er '.network_interfaces[0].subnet_id' <<<"$existing_instance"
+          )"
+          existing_security_group_ids="$(
+            jq -cer '.network_interfaces[0].security_group_ids // []' \
+              <<<"$existing_instance"
+          )"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$YC_FOLDER_ID"
@@ -538,8 +546,8 @@ jobs:
           manage_dns_record   = false
           manage_backup_resources = false
           use_existing_network = true
-          existing_subnet_name = "guestbook-subnet"
-          existing_security_group_name = "guestbook-sg"
+          existing_subnet_id = "$existing_subnet_id"
+          existing_security_group_ids = $existing_security_group_ids
           manage_load_balancer = false
           subnet_cidr          = "10.10.0.0/24"
           cluster_name        = "final-k3s-v2"
@@ -581,6 +589,11 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
+          recovery_state="$GITHUB_WORKSPACE/final-infra/terraform/envs/prod/errored.tfstate"
+          if [[ -s "$recovery_state" ]]; then
+            echo "::warning title=Terraform recovery state::Using errored.tfstate produced by Terraform"
+            cp "$recovery_state" "$TF_STATE_FILE"
+          fi
           if [[ -s "$TF_STATE_FILE" ]]; then
             openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
               -in "$TF_STATE_FILE" \

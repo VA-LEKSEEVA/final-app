@@ -34,8 +34,10 @@ locals {
   ssh_public_key = var.ssh_public_key_path != null && var.ssh_public_key_path != "" ? trimspace(
     file(pathexpand(var.ssh_public_key_path))
   ) : trimspace(tls_private_key.cluster.public_key_openssh)
-  subnet_id         = var.use_existing_network ? data.yandex_vpc_subnet.existing[0].id : yandex_vpc_subnet.cluster[0].id
-  security_group_id = var.use_existing_network ? data.yandex_vpc_security_group.existing[0].id : yandex_vpc_security_group.cluster[0].id
+  subnet_id = var.use_existing_network ? var.existing_subnet_id : yandex_vpc_subnet.cluster[0].id
+  security_group_ids = var.use_existing_network ? var.existing_security_group_ids : [
+    yandex_vpc_security_group.cluster[0].id
+  ]
   app_public_ip = var.manage_load_balancer ? one([
     for listener in yandex_lb_network_load_balancer.ingress[0].listener :
     one(listener.external_address_spec).address
@@ -129,20 +131,6 @@ resource "yandex_vpc_security_group" "cluster" {
   }
 }
 
-data "yandex_vpc_subnet" "existing" {
-  count = var.use_existing_network ? 1 : 0
-
-  name      = var.existing_subnet_name
-  folder_id = local.effective_folder_id
-}
-
-data "yandex_vpc_security_group" "existing" {
-  count = var.use_existing_network ? 1 : 0
-
-  name      = var.existing_security_group_name
-  folder_id = local.effective_folder_id
-}
-
 data "yandex_compute_image" "ubuntu" {
   family = var.ubuntu_image_family
 }
@@ -177,7 +165,7 @@ resource "yandex_compute_instance" "node" {
     subnet_id          = local.subnet_id
     nat                = true
     ip_address         = var.use_existing_network ? null : each.value.local_ip
-    security_group_ids = [local.security_group_id]
+    security_group_ids = local.security_group_ids
   }
 
   metadata = {

@@ -77,16 +77,17 @@ variable "use_existing_network" {
   default     = false
 }
 
-variable "existing_subnet_name" {
-  description = "Existing subnet name used when use_existing_network is true."
+variable "existing_subnet_id" {
+  description = "Existing subnet ID used when use_existing_network is true."
   type        = string
-  default     = "guestbook-subnet"
+  default     = null
+  nullable    = true
 }
 
-variable "existing_security_group_name" {
-  description = "Existing security group name used when use_existing_network is true."
-  type        = string
-  default     = "guestbook-sg"
+variable "existing_security_group_ids" {
+  description = "Existing security group IDs used when use_existing_network is true."
+  type        = list(string)
+  default     = []
 }
 
 variable "manage_load_balancer" {
