@@ -358,6 +358,18 @@ jobs:
               if marker not in content:
                   raise SystemExit("Grafana values marker was not found")
               path.write_text(content.replace(marker, replacement))
+
+          path = Path("bootstrap/apps/02-ingress-nginx.yaml")
+          content = path.read_text()
+          if "kind: DaemonSet" not in content:
+              marker = """        controller:
+          """
+              replacement = """        controller:
+                    kind: DaemonSet
+          """
+              if marker not in content:
+                  raise SystemExit("Ingress controller values marker was not found")
+              path.write_text(content.replace(marker, replacement, 1))
           PY
 
       - name: Commit and push
@@ -531,69 +543,44 @@ jobs:
       - name: Prepare Terraform variables
         run: |
           set -euo pipefail
-          candidate_folders="$YC_FOLDER_ID"
-          folders_json="$(yc resource-manager folder list \
-            --cloud-id "$YC_CLOUD_ID" \
-            --format json 2>/dev/null || printf '[]')"
-          while IFS= read -r folder_id; do
-            [[ -n "$folder_id" ]] || continue
-            if ! printf '%s\n' "$candidate_folders" | grep -Fxq "$folder_id"; then
-              candidate_folders="${candidate_folders}"$'\n'"${folder_id}"
-            fi
-          done < <(jq -r '.[].id // empty' <<<"$folders_json")
-
-          existing_folder_id=""
-          existing_subnet_id=""
-          existing_security_group_ids="[]"
-          while IFS= read -r folder_id; do
-            [[ -n "$folder_id" ]] || continue
-            subnets_json="$(yc vpc subnet list \
-              --folder-id "$folder_id" \
-              --format json 2>/dev/null || printf '[]')"
-            subnet_json="$(
-              jq -c '
-                [
-                  .[] |
-                  select(
-                    (.zone_id // .zoneId // "") == "ru-central1-a" and
-                    (.name // "") == "guestbook-subnet"
-                  )
-                ] |
-                first // empty
-              ' <<<"$subnets_json"
-            )"
-            [[ -n "$subnet_json" ]] || continue
-
-            existing_subnet_id="$(
-              jq -er '.id' <<<"$subnet_json"
-            )"
-            existing_network_id="$(
-              jq -er '.network_id // .networkId' <<<"$subnet_json"
-            )"
-            security_groups_json="$(yc vpc security-group list \
-              --folder-id "$folder_id" \
-              --format json 2>/dev/null || printf '[]')"
-            existing_security_group_ids="$(
-              jq -c --arg network_id "$existing_network_id" '
-                [
-                  .[] |
-                  select(
-                    (.network_id // .networkId // "") == $network_id and
-                    (.name // "") == "guestbook-sg"
-                  ) |
-                  .id
-                ][0:1]
-              ' <<<"$security_groups_json"
-            )"
-            existing_folder_id="$folder_id"
-            break
-          done <<<"$candidate_folders"
-
-          if [[ -z "$existing_subnet_id" || -z "$existing_folder_id" ]]; then
-            echo "::error title=Existing network discovery failed::The expected guestbook-subnet was not found in ru-central1-a"
-            exit 1
-          fi
-          echo "Using the expected guestbook network"
+          legacy_state="$RUNNER_TEMP/legacy-production.tfstate"
+          yc storage s3api get-object \
+            --bucket vika-tfstate-20260705-3260 \
+            --key final/terraform.tfstate \
+            "$legacy_state" >/dev/null
+          existing_subnet_id="$(
+            jq -er '
+              [
+                .resources[] |
+                select(.type == "yandex_vpc_subnet") |
+                .instances[]?.attributes.id
+              ] |
+              first
+            ' "$legacy_state"
+          )"
+          existing_security_group_ids="$(
+            jq -cer '
+              [
+                .resources[] |
+                select(.type == "yandex_vpc_security_group") |
+                .instances[]?.attributes.id
+              ][0:1]
+            ' "$legacy_state"
+          )"
+          existing_folder_id="$(
+            jq -r '
+              [
+                .resources[] |
+                select(.type == "yandex_compute_instance") |
+                .instances[]?.attributes.folder_id //
+                empty
+              ] |
+              first // empty
+            ' "$legacy_state"
+          )"
+          [[ -n "$existing_folder_id" ]] ||
+            existing_folder_id="$YC_FOLDER_ID"
+          echo "Using the existing guestbook network state"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$existing_folder_id"
