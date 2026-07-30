@@ -555,7 +555,8 @@ jobs:
                 [
                   .[] |
                   select(
-                    (.zone_id // .zoneId // "") == "ru-central1-a"
+                    (.zone_id // .zoneId // "") == "ru-central1-a" and
+                    (.name // "") == "guestbook-subnet"
                   )
                 ] |
                 first // empty
@@ -577,7 +578,8 @@ jobs:
                 [
                   .[] |
                   select(
-                    (.network_id // .networkId // "") == $network_id
+                    (.network_id // .networkId // "") == $network_id and
+                    (.name // "") == "guestbook-sg"
                   ) |
                   .id
                 ][0:1]
@@ -588,10 +590,10 @@ jobs:
           done <<<"$candidate_folders"
 
           if [[ -z "$existing_subnet_id" || -z "$existing_folder_id" ]]; then
-            echo "::error title=Existing network discovery failed::No accessible subnet was found in ru-central1-a"
+            echo "::error title=Existing network discovery failed::The expected guestbook-subnet was not found in ru-central1-a"
             exit 1
           fi
-          echo "Using an existing accessible subnet"
+          echo "Using the expected guestbook network"
           cat > "$TF_VARS_FILE" <<EOF
           cloud_id            = "$YC_CLOUD_ID"
           folder_id           = "$existing_folder_id"
@@ -623,14 +625,18 @@ jobs:
               -input=false \
               -lock=false \
               -var-file="$TF_VARS_FILE"
-          } 2>&1 | tee "$terraform_log"
-          terraform_status="${PIPESTATUS[0]}"
+          } >"$terraform_log" 2>&1
+          terraform_status="$?"
           set -e
           echo "status=$terraform_status" >> "$GITHUB_OUTPUT"
           if ((terraform_status != 0)); then
             error_message="$(
               tail -n 25 "$terraform_log" |
                 sed -E $'s/\x1b\\[[0-9;]*[mK]//g' |
+                sed -E \
+                  -e 's/(client-request-id|client-trace-id|RequestID|HostID)[[:space:]]*=[[:space:]]*[^ ,│]+/\1=<redacted>/g' \
+                  -e 's/\\b(b1g|e9b|enp|fh8|dns|crp)[a-z0-9]{10,}\\b/<resource-id>/g' \
+                  -e 's/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/<request-id>/g' |
                 tr '\n' ' ' |
                 cut -c1-4000
             )"
