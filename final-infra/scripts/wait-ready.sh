@@ -66,12 +66,36 @@ dump_cluster_diagnostics() {
     printf '===== END CLUSTER DIAGNOSTICS =====\n'
   } | redact_sensitive | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}" >&2
 
+  # Build a single-line, redacted annotation that names each stuck Argo CD
+  # Application with its sync/health status, plus the generic (non-sensitive)
+  # waiting reasons of pods that are not Ready. This makes the root cause
+  # visible on the public run page, not only in the auth-gated step log.
   local stuck
   stuck="$(kubectl_cmd -n argocd get applications.argoproj.io -o json 2>/dev/null |
-    jq -r '[.items[]? | select(.status.sync.status != "Synced" or .status.health.status != "Healthy") | .metadata.name] | join(", ")' 2>/dev/null || true)"
+    jq -r '
+      [.items[]?
+        | select(.status.sync.status != "Synced" or .status.health.status != "Healthy")
+        | "\(.metadata.name)(\(.status.sync.status // "?")/\(.status.health.status // "?"))"
+      ] | join(", ")
+    ' 2>/dev/null || true)"
+  local pod_reasons
+  pod_reasons="$(kubectl_cmd get pods -A -o json 2>/dev/null |
+    jq -r '
+      [.items[]?
+        | select(
+            (.status.phase != "Running" and .status.phase != "Succeeded") or
+            ([.status.containerStatuses[]? | select(.ready != true)] | length > 0)
+          )
+        | .metadata.namespace as $ns
+        | (([.status.containerStatuses[]?.state.waiting.reason,
+             .status.initContainerStatuses[]?.state.waiting.reason]
+            | map(select(. != null)) | unique | join(",")) as $reasons
+          | "\($ns):\(.metadata.labels["app.kubernetes.io/name"] // (.metadata.ownerReferences[0].name // "pod"))=\(if $reasons == "" then .status.phase else $reasons end)")
+      ] | unique | join("; ")
+    ' 2>/dev/null || true)"
   if [[ -n "$stuck" ]]; then
-    printf '::error title=Argo CD not converged::Applications not Synced+Healthy: %s\n' "$stuck" |
-      redact_sensitive >&2
+    printf '::error title=Argo CD not converged::Stuck apps: %s. Pod reasons: %s\n' \
+      "$stuck" "${pod_reasons:-none}" | redact_sensitive >&2
   fi
 }
 trap dump_cluster_diagnostics EXIT
