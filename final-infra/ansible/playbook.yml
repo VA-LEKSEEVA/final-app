@@ -276,6 +276,37 @@
       register: argocd_install
       changed_when: "'configured' in argocd_install.stdout or 'created' in argocd_install.stdout"
 
+    - name: Render Prometheus custom health patch for Argo CD
+      ansible.builtin.template:
+        src: templates/argocd-prometheus-health-patch.yaml.j2
+        dest: /tmp/argocd-prometheus-health-patch.yaml
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Configure Prometheus custom health assessment
+      ansible.builtin.command: >-
+        k3s kubectl -n {{ argocd_namespace }}
+        patch configmap argocd-cm
+        --type merge
+        --patch-file /tmp/argocd-prometheus-health-patch.yaml
+      register: argocd_prometheus_health
+      changed_when: "'patched' in argocd_prometheus_health.stdout"
+
+    - name: Restart Argo CD application controller after health customization
+      ansible.builtin.command: >-
+        k3s kubectl -n {{ argocd_namespace }}
+        rollout restart statefulset/argocd-application-controller
+      register: argocd_controller_restart
+      changed_when: "'restarted' in argocd_controller_restart.stdout"
+
+    - name: Wait for Argo CD application controller
+      ansible.builtin.command: >-
+        k3s kubectl -n {{ argocd_namespace }}
+        rollout status statefulset/argocd-application-controller
+        --timeout=300s
+      changed_when: false
+
     - name: Wait for Argo CD server deployment
       ansible.builtin.command: >-
         k3s kubectl -n {{ argocd_namespace }}

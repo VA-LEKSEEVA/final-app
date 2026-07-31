@@ -1,0 +1,63 @@
+---
+data:
+  resource.customizations.health.monitoring.coreos.com_Prometheus: |
+    hs = {}
+    hs.status = "Progressing"
+    hs.message = "Waiting for Prometheus to become available"
+
+    if obj.status == nil then
+      return hs
+    end
+
+    if obj.status.paused == true then
+      hs.status = "Suspended"
+      hs.message = "Prometheus reconciliation is paused"
+      return hs
+    end
+
+    local available = nil
+    local reconciled = nil
+    if obj.status.conditions ~= nil then
+      for _, condition in ipairs(obj.status.conditions) do
+        if condition.type == "Available" then
+          available = condition.status
+        end
+        if condition.type == "Reconciled" then
+          reconciled = condition.status
+        end
+      end
+    end
+
+    if reconciled == "False" then
+      hs.status = "Degraded"
+      hs.message = "Prometheus operator reconciliation failed"
+      return hs
+    end
+
+    if available == "False" or available == "Degraded" then
+      hs.status = "Degraded"
+      hs.message = "Prometheus is not fully available"
+      return hs
+    end
+
+    if available == "True" and (reconciled == nil or reconciled == "True") then
+      hs.status = "Healthy"
+      hs.message = "Prometheus is available"
+      return hs
+    end
+
+    local replicas = obj.status.replicas or 0
+    local availableReplicas = obj.status.availableReplicas or 0
+    local updatedReplicas = obj.status.updatedReplicas or 0
+    local unavailableReplicas = obj.status.unavailableReplicas or 0
+
+    if replicas > 0 and
+       availableReplicas >= replicas and
+       updatedReplicas >= replicas and
+       unavailableReplicas == 0 then
+      hs.status = "Healthy"
+      hs.message = "All Prometheus replicas are available and updated"
+      return hs
+    end
+
+    return hs
